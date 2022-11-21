@@ -22,6 +22,7 @@ add_executable(
   ArrayContainsTest.cpp
   ArrayDistinctTest.cpp
   ArrayDuplicatesTest.cpp
+  ArrayHasDuplicatesTest.cpp
   ArrayExceptTest.cpp
   ArrayFilterTest.cpp
   ArrayJoinTest.cpp
