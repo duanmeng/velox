@@ -78,6 +78,7 @@ inline void registerArrayNormalizeFunctions() {
 
 void registerArrayFunctions() {
   registerArrayConstructor("array_constructor");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, "all_match");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_duplicates, "array_duplicates");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_intersect, "array_intersect");
