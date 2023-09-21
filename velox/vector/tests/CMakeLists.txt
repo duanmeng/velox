@@ -15,6 +15,7 @@ add_subdirectory(utils)
 
 add_executable(
   velox_vector_test
+  ContainsNull.cpp
   VectorCompareTest.cpp
   VectorSaverTest.cpp
   VectorMakerTest.cpp

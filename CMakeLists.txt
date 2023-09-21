@@ -71,8 +71,8 @@ option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        OFF)
 option(VELOX_ENABLE_SUBSTRAIT "Build Substrait-to-Velox converter." OFF)
-option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
-option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
+option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." ON)
+option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." ON)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
