@@ -21,6 +21,7 @@
 #include <iostream>
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/ContainsNull.h"
 
 DEFINE_uint32(vectorSize, 1000, "vector size per batch");
 DEFINE_double(nullRatio, 0.1, "null ratio");
@@ -32,7 +33,7 @@ using namespace facebook::velox::test;
 
 namespace {
 
-class ContainsNull {
+/*class ContainsNull {
  public:
   explicit ContainsNull(const VectorPtr& vector)
       : typeKind_{vector->typeKind()}, decoded_{*vector} {
@@ -127,7 +128,7 @@ class ContainsNull {
   std::vector<std::unique_ptr<ContainsNull>> children_;
   const vector_size_t* rawOffsets_;
   const vector_size_t* rawSizes_;
-};
+};*/
 
 class ContainsNullBenchmark : public functions::test::FunctionBenchmarkBase {
  public:
