@@ -225,5 +225,91 @@ TEST_F(SetUnionTest, groupBy) {
       {expected});
 }
 
+TEST_F(SetUnionTest, arrayCheckNulls) {
+  auto baseVector = makeArrayVectorFromJson<int32_t>({
+      "[1, 1]",
+      "[2, 2]",
+      "[3, 3]",
+      "[4, 4]",
+      "[5, 5]",
+      "[6, 6]",
+  });
+
+  const auto batch = makeRowVector({
+      makeArrayVector({0, 3, 4}, baseVector),
+  });
+
+  baseVector = makeArrayVectorFromJson<int32_t>({
+      "[1, 1]",
+      "[2, 2]",
+      "[3, null]",
+      "[4, 4]",
+      "[5, 5]",
+      "[6, 6]",
+  });
+
+  const auto batchWithNull =
+      makeRowVector({makeArrayVector({0, 3, 4}, baseVector)});
+
+  testFailingAggregations(
+      {batch, batchWithNull},
+      {},
+      {"set_union(c0)"},
+      "ARRAY comparison not supported for values that contain nulls");
+}
+
+TEST_F(SetUnionTest, rowCheckNulls) {
+  auto baseVector = makeRowVector({
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+      }),
+  });
+
+  const auto batch = makeRowVector({
+      makeArrayVector({0, 3, 4}, baseVector),
+  });
+
+  baseVector = makeRowVector({
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+      }),
+      makeNullableFlatVector<int32_t>({
+          1,
+          {std::nullopt},
+          3,
+          4,
+          5,
+          6,
+      }),
+  });
+
+  const auto batchWithNull =
+      makeRowVector({makeArrayVector({0, 3, 4}, baseVector)});
+
+  testFailingAggregations(
+      {batch, batchWithNull},
+      {},
+      {"set_union(c0)"},
+      "ROW comparison not supported for values that contain nulls");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

@@ -17,7 +17,6 @@
 #include "velox/exec/SetAccumulator.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/Compare.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -26,8 +25,8 @@ namespace {
 template <typename T>
 class SetBaseAggregate : public exec::Aggregate {
  public:
-  explicit SetBaseAggregate(const TypePtr& resultType)
-      : exec::Aggregate(resultType) {}
+  explicit SetBaseAggregate(const TypePtr& resultType, bool throwOnNestedNulls)
+      : exec::Aggregate(resultType), throwOnNestedNulls_(throwOnNestedNulls) {}
 
   using AccumulatorType = SetAccumulator<T>;
 
@@ -143,6 +142,7 @@ class SetBaseAggregate : public exec::Aggregate {
 
     auto baseArray = decoded_.base()->template as<ArrayVector>();
     decodedElements_.decode(*baseArray->elements());
+    const auto* indices = decodedElements_.indices();
 
     rows.applyToSelected([&](vector_size_t i) {
       if (decoded_.isNullAt(i)) {
@@ -152,6 +152,7 @@ class SetBaseAggregate : public exec::Aggregate {
         return;
       }
 
+      checkNestedNulls(decodedElements_, indices, i, throwOnNestedNulls_);
       auto* group = groups[i];
       clearNull(group);
 
@@ -173,6 +174,7 @@ class SetBaseAggregate : public exec::Aggregate {
     auto baseArray = decoded_.base()->template as<ArrayVector>();
 
     decodedElements_.decode(*baseArray->elements());
+    const auto* indices = decodedElements_.indices();
 
     auto* accumulator = value(group);
 
@@ -185,6 +187,7 @@ class SetBaseAggregate : public exec::Aggregate {
         return;
       }
 
+      checkNestedNulls(decodedElements_, indices, i, throwOnNestedNulls_);
       clearNull(group);
 
       auto decodedIndex = decoded_.index(i);
@@ -195,6 +198,7 @@ class SetBaseAggregate : public exec::Aggregate {
 
   DecodedVector decoded_;
   DecodedVector decodedElements_;
+  const bool throwOnNestedNulls_;
 };
 
 template <typename T>
@@ -203,8 +207,7 @@ class SetAggAggregate : public SetBaseAggregate<T> {
   explicit SetAggAggregate(
       const TypePtr& resultType,
       const bool throwOnNestedNulls = false)
-      : SetBaseAggregate<T>(resultType),
-        throwOnNestedNulls_(throwOnNestedNulls) {}
+      : SetBaseAggregate<T>(resultType, throwOnNestedNulls) {}
 
   using Base = SetBaseAggregate<T>;
 
@@ -218,11 +221,12 @@ class SetAggAggregate : public SetBaseAggregate<T> {
       VectorPtr& result) const override {
     const auto& elements = args[0];
 
-    if (throwOnNestedNulls_) {
+    if (Base::throwOnNestedNulls_) {
       DecodedVector decodedElements(*elements, rows);
       auto indices = decodedElements.indices();
       rows.applyToSelected([&](vector_size_t i) {
-        checkNestedNulls(decodedElements, indices, i, throwOnNestedNulls_);
+        checkNestedNulls(
+            decodedElements, indices, i, Base::throwOnNestedNulls_);
       });
     }
 
@@ -269,8 +273,8 @@ class SetAggAggregate : public SetBaseAggregate<T> {
       auto* group = groups[i];
       Base::clearNull(group);
 
-      if (throwOnNestedNulls_) {
-        checkNestedNulls(Base::decoded_, indices, i, throwOnNestedNulls_);
+      if (Base::throwOnNestedNulls_) {
+        checkNestedNulls(Base::decoded_, indices, i, Base::throwOnNestedNulls_);
       }
 
       auto tracker = Base::trackRowSize(group);
@@ -291,23 +295,22 @@ class SetAggAggregate : public SetBaseAggregate<T> {
     auto tracker = Base::trackRowSize(group);
     auto indices = Base::decoded_.indices();
     rows.applyToSelected([&](vector_size_t i) {
-      if (throwOnNestedNulls_) {
-        checkNestedNulls(Base::decoded_, indices, i, throwOnNestedNulls_);
+      if (Base::throwOnNestedNulls_) {
+        checkNestedNulls(Base::decoded_, indices, i, Base::throwOnNestedNulls_);
       }
 
       accumulator->addValue(Base::decoded_, i, Base::allocator_);
     });
   }
-
- private:
-  const bool throwOnNestedNulls_;
 };
 
 template <typename T>
 class SetUnionAggregate : public SetBaseAggregate<T> {
  public:
-  explicit SetUnionAggregate(const TypePtr& resultType)
-      : SetBaseAggregate<T>(resultType) {}
+  explicit SetUnionAggregate(
+      const TypePtr& resultType,
+      bool throwOnNestedNulls = false)
+      : SetBaseAggregate<T>(resultType, throwOnNestedNulls) {}
 
   using Base = SetBaseAggregate<T>;
 
@@ -320,6 +323,18 @@ class SetUnionAggregate : public SetBaseAggregate<T> {
       std::vector<VectorPtr>& args,
       VectorPtr& result) const override {
     auto arrayInput = args[0];
+
+    if (Base::throwOnNestedNulls_) {
+      DecodedVector decoded(*arrayInput, rows);
+      auto baseArray = decoded.base()->template as<ArrayVector>();
+      DecodedVector decodedElements(*baseArray->elements());
+      auto indices = decodedElements.indices();
+
+      rows.applyToSelected([&](vector_size_t i) {
+        checkNestedNulls(
+            decodedElements, indices, i, Base::throwOnNestedNulls_);
+      });
+    }
 
     if (arrayInput->mayHaveNulls()) {
       // Convert null arrays into empty arrays. set_union(<all null>) returns
@@ -384,7 +399,8 @@ class SetUnionAggregate : public SetBaseAggregate<T> {
 template <template <typename T> class Aggregate>
 std::unique_ptr<exec::Aggregate> create(
     TypeKind typeKind,
-    const TypePtr& resultType) {
+    const TypePtr& resultType,
+    const bool throwOnNestedNulls = false) {
   switch (typeKind) {
     case TypeKind::BOOLEAN:
       return std::make_unique<Aggregate<bool>>(resultType);
@@ -411,7 +427,8 @@ std::unique_ptr<exec::Aggregate> create(
     case TypeKind::MAP:
       [[fallthrough]];
     case TypeKind::ROW:
-      return std::make_unique<Aggregate<ComplexType>>(resultType);
+      return std::make_unique<Aggregate<ComplexType>>(
+          resultType, throwOnNestedNulls);
     default:
       VELOX_UNREACHABLE("Unexpected type {}", mapTypeKindToName(typeKind));
   }
@@ -441,39 +458,8 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
         const TypeKind typeKind =
             isRawInput ? argTypes[0]->kind() : argTypes[0]->childAt(0)->kind();
         const bool throwOnNestedNulls = isRawInput;
-
-        switch (typeKind) {
-          case TypeKind::BOOLEAN:
-            return std::make_unique<SetAggAggregate<bool>>(resultType);
-          case TypeKind::TINYINT:
-            return std::make_unique<SetAggAggregate<int8_t>>(resultType);
-          case TypeKind::SMALLINT:
-            return std::make_unique<SetAggAggregate<int16_t>>(resultType);
-          case TypeKind::INTEGER:
-            return std::make_unique<SetAggAggregate<int32_t>>(resultType);
-          case TypeKind::BIGINT:
-            return std::make_unique<SetAggAggregate<int64_t>>(resultType);
-          case TypeKind::REAL:
-            return std::make_unique<SetAggAggregate<float>>(resultType);
-          case TypeKind::DOUBLE:
-            return std::make_unique<SetAggAggregate<double>>(resultType);
-          case TypeKind::TIMESTAMP:
-            return std::make_unique<SetAggAggregate<Timestamp>>(resultType);
-          case TypeKind::VARBINARY:
-            [[fallthrough]];
-          case TypeKind::VARCHAR:
-            return std::make_unique<SetAggAggregate<StringView>>(resultType);
-          case TypeKind::ARRAY:
-            [[fallthrough]];
-          case TypeKind::MAP:
-            [[fallthrough]];
-          case TypeKind::ROW:
-            return std::make_unique<SetAggAggregate<ComplexType>>(
-                resultType, throwOnNestedNulls);
-          default:
-            VELOX_UNREACHABLE(
-                "Unexpected type {}", mapTypeKindToName(typeKind));
-        }
+        return create<SetAggAggregate>(
+            typeKind, resultType, throwOnNestedNulls);
       });
 }
 
@@ -490,7 +476,7 @@ exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step /*step*/,
+          core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
@@ -498,8 +484,9 @@ exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
         const TypeKind typeKind = argTypes[0]->childAt(0)->kind();
-
-        return create<SetUnionAggregate>(typeKind, resultType);
+        const bool throwOnNestedNulls = exec::isRawInput(step);
+        return create<SetUnionAggregate>(
+            typeKind, resultType, throwOnNestedNulls);
       });
 }
 
