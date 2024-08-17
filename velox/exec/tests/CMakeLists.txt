@@ -82,6 +82,7 @@ add_executable(
   ThreadDebugInfoTest.cpp
   TopNRowNumberTest.cpp
   TopNTest.cpp
+  QueryTracerTest.cpp
   UnnestTest.cpp
   UnorderedStreamReaderTest.cpp
   ValuesTest.cpp
@@ -131,6 +132,7 @@ target_link_libraries(
   velox_functions_lib
   velox_functions_prestosql
   velox_functions_test_lib
+  velox_query_trace_retrieve
   velox_hive_connector
   velox_memory
   velox_serialization
