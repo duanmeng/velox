@@ -22,6 +22,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/QueryDataWriter.h"
+#include "velox/exec/QuerySplitWriter.h"
 #include "velox/exec/Spiller.h"
 #include "velox/type/Filter.h"
 
@@ -740,8 +741,8 @@ class Operator : public BaseRuntimeStatWriter {
     return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   }
 
-  /// Invoked to setup query data writer for this operator if the associated
-  /// query plan node is configured to collect trace.
+  /// Invoked to setup query data or split writer for this operator if the
+  /// associated query plan node is configured to collect trace.
   void maybeSetTracer();
 
   /// Creates output vector from 'input_' and 'results' according to
@@ -781,7 +782,12 @@ class Operator : public BaseRuntimeStatWriter {
 
   folly::Synchronized<OperatorStats> stats_;
   folly::Synchronized<common::SpillStats> spillStats_;
-  std::unique_ptr<trace::QueryDataWriter> inputTracer_;
+
+  /// NOTE: only one of the two could be set for an operator for tracing .
+  /// 'splitTracer_' is only set for table scan to record the processed split
+  /// for now.
+  std::unique_ptr<trace::QueryDataWriter> inputTracer_{nullptr};
+  std::unique_ptr<trace::QuerySplitWriter> splitTracer_{nullptr};
 
   /// Indicates if an operator is under a non-reclaimable execution section.
   /// This prevents the memory arbitrator from reclaiming memory from this
@@ -806,6 +812,12 @@ class Operator : public BaseRuntimeStatWriter {
 
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       dynamicFilters_;
+
+ private:
+  // Setup 'inputTracer_' to record the processed input vectors.
+  void setupInputTracer(const std::string& traceDir);
+  // Setup 'splitTracer_' for table scan to record the processed split.
+  void setupSplitTracer(const std::string& traceDir);
 };
 
 /// Given a row type returns indices for the specified subset of columns.
