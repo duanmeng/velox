@@ -71,3 +71,16 @@ target_link_libraries(
   velox_trace_file_tool velox_trace_file_tool_base)
 
 add_subdirectory(tests)
+
+add_executable(velox_maxwell_left_join MaxwellLeftJoin.cpp)
+
+target_link_libraries(
+  velox_maxwell_left_join
+  velox_query_trace_replayer_base
+  velox_type
+  velox_vector
+  velox_exec
+  velox_exec_test_lib
+  velox_hive_connector
+  velox_dwio_parquet_reader
+  velox_memory)

@@ -63,6 +63,82 @@ class ParquetReaderTest : public ParquetTestBase {
   }
 };
 
+namespace {
+RowTypePtr maxwell() {
+  return ROW(
+      {
+          "_hoodie_record_key",
+
+      },
+      {
+          VARCHAR(),
+
+      });
+}
+
+RowTypePtr maxwell1() {
+  return ROW(
+      {
+          "_hoodie_record_key",
+          "backfill_live_ecom_product_seq_uid_filtered_250113_new_product_app_id",
+      },
+      {
+          VARCHAR(),
+          ROW({"c0"},
+              {ROW(
+                  {
+                      "value",
+                  },
+                  {
+                      ARRAY(BIGINT()),
+                  })}),
+      });
+}
+
+RowTypePtr maxwell2() {
+  return ROW(
+      {
+
+          "backfill_live_ecom_product_seq_uid_filtered_250113_new_product_app_id",
+      },
+      {
+
+          ROW({"c0"},
+              {ROW(
+                  {
+                      "value",
+                  },
+                  {
+                      ARRAY(BIGINT()),
+                  })}),
+      });
+}
+} // namespace
+
+TEST_F(ParquetReaderTest, maxwell) {
+  // const std::string fileName =
+  // "/Users/bytedance/Downloads/00001023-0_1023-1-17111#20250104165820#20250104173115_20250104173115.parquet";
+  const std::string fileName =
+      "/Users/bytedance/Downloads/00001023-0_630-3-23689#20250114210208#20250115002758_20250115002758.parquet";
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(fileName, readerOptions);
+  LOG(ERROR) << reader->numberOfRows().value();
+  auto type = reader->typeWithId();
+  const auto numCol = type->size();
+  LOG(ERROR) << "num of column is " << numCol;
+  // LOG(ERROR) << "type is : " << type->type()->toString();
+  auto rowReaderOpts = getReaderOpts(maxwell2());
+  auto scanSpec = makeScanSpec(maxwell2());
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  const auto& rowType = reader->rowType();
+  VectorPtr result = BaseVector::create(maxwell2(), 100, leafPool_.get());
+  rowReader->next(100, result);
+  LOG(ERROR) << result->toString(true);
+  LOG(ERROR) << result->toString(0, 100);
+}
+
 TEST_F(ParquetReaderTest, parseSample) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
   // 20 rows (10 rows per group). Group offsets are 153 and 614.
