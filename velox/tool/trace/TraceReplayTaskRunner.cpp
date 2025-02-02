@@ -48,11 +48,20 @@ std::shared_ptr<RowVector> TraceReplayTaskRunner::copy(
       cursorParams_.planNode->outputType(),
       totalRows,
       memory::traceMemoryPool());
-  auto resultRowOffset = 0;
-  for (const auto& result : results) {
-    copyResult->copy(result.get(), resultRowOffset, 0, result->size());
-    resultRowOffset += result->size();
+  uint64_t copyTimeMicor{0};
+  bool isLazy = results.front()->childAt(3)->isLazy();
+  LOG(ERROR) << "results is " << (isLazy ? "lazy" : "non-lazy");
+
+  {
+    MicrosecondTimer timer{&copyTimeMicor};
+    auto resultRowOffset = 0;
+    for (const auto& result : results) {
+      copyResult->copy(result.get(), resultRowOffset, 0, result->size());
+      resultRowOffset += result->size();
+    }
   }
+  LOG(ERROR) << "copy results uses " << copyTimeMicor / 1000 << "ms "
+             << totalRows << " rows";
   return copyResult;
 }
 
