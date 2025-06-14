@@ -314,19 +314,19 @@ if(VELOX_ENABLE_BENCHMARKS)
 
   add_library(velox_spill_merger_benchmark_base SpillMergerBenchmarkBase.cpp)
   target_link_libraries(
-          velox_spill_merger_benchmark_base
-          velox_exec
-          velox_exec_test_lib
-          velox_memory
-          velox_vector_fuzzer
-          glog::glog
-          gflags::gflags
-          Folly::folly
-          pthread)
+    velox_spill_merger_benchmark_base
+    velox_exec
+    velox_exec_test_lib
+    velox_memory
+    velox_vector_fuzzer
+    glog::glog
+    gflags::gflags
+    Folly::folly
+    pthread)
 
   add_executable(velox_spill_merger_benchmark SpillMergerBenchmarkTest.cpp)
   target_link_libraries(velox_spill_merger_benchmark velox_exec
-          velox_exec_test_lib velox_spill_merger_benchmark_base)
+                        velox_exec_test_lib velox_spill_merger_benchmark_base)
 endif()
 
 add_executable(cpr_http_client_test CprHttpClientTest.cpp)

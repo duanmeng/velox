@@ -291,6 +291,35 @@ class MergeExchangeSource : public MergeSource {
 };
 } // namespace
 
+class SpillMergeSource : public MergeSource {
+ public:
+  explicit SpillMergeSource(std::unique_ptr<BatchStream> batchStream)
+      : batchStream_(std::move(batchStream)) {}
+
+  void start() override {
+    VELOX_UNSUPPORTED();
+  }
+
+  BlockingReason started(ContinueFuture* /*future*/) override {
+    VELOX_UNSUPPORTED();
+  }
+
+  BlockingReason next(RowVectorPtr& data, ContinueFuture* /*future*/) override {
+    batchStream_->nextBatch(data);
+    return BlockingReason::kNotBlocked;
+  }
+
+  BlockingReason enqueue(RowVectorPtr input, ContinueFuture* /*future*/)
+      override {
+    VELOX_UNSUPPORTED();
+  }
+
+  void close() override {}
+
+ private:
+  std::unique_ptr<BatchStream> batchStream_;
+};
+
 std::shared_ptr<MergeSource> MergeSource::createLocalMergeSource() {
   // Buffer up to 2 vectors from each source before blocking to wait
   // for consumers.
@@ -307,6 +336,11 @@ std::shared_ptr<MergeSource> MergeSource::createMergeExchangeSource(
     folly::Executor* executor) {
   return std::make_shared<MergeExchangeSource>(
       mergeExchange, taskId, destination, maxQueuedBytes, pool, executor);
+}
+
+std::unique_ptr<MergeSource> MergeSource::createSpillMergeSource(
+    std::unique_ptr<BatchStream> batchStream) {
+  return std::make_unique<SpillMergeSource>(std::move(batchStream));
 }
 
 BlockingReason MergeJoinSource::next(

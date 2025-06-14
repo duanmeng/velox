@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "UnorderedStreamReader.h"
 #include "velox/exec/Driver.h"
 
 namespace facebook::velox::exec {
@@ -55,6 +56,9 @@ class MergeSource {
       int64_t maxQueuedBytes,
       memory::MemoryPool* pool,
       folly::Executor* executor);
+
+  static std::unique_ptr<MergeSource> createSpillMergeSource(
+      std::unique_ptr<BatchStream> batchStream);
 };
 
 /// Coordinates data transfer between single producer and single consumer. Used

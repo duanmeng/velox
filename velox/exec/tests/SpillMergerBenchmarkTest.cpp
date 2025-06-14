@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/common/file/FileSystems.h"
 #include <gflags/gflags.h>
-#include "velox/serializers/PrestoSerializer.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/SpillMergerBenchmarkBase.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox;
 

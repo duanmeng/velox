@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,26 +23,28 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/exec/Merge.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
-#include "velox/exec/Merge.h"
 
 #include <folly/executors/IOThreadPoolExecutor.h>
 
 DECLARE_string(spill_merger_benchmark_name);
 DECLARE_string(spill_merger_benchmark_path);
+DECLARE_bool(spill_merger_benchmark_readAhead);
 DECLARE_string(spill_merger_benchmark_spill_compression_kind);
 DECLARE_uint32(spill_merger_benchmark_spill_executor_size);
 DECLARE_uint32(spill_merger_benchmark_num_spill_vectors);
 DECLARE_uint32(spill_merger_benchmark_spill_vector_size);
 DECLARE_uint32(spill_merger_benchmark_num_merge_sources);
 DECLARE_uint64(spill_merger_benchmark_max_spill_file_size);
+DECLARE_uint32(spill_merger_benchmark_method);
 
 namespace facebook::velox::exec::test {
 class SpillMergerBenchmarkBase {
-public:
- SpillMergerBenchmarkBase() = default;
+ public:
+  SpillMergerBenchmarkBase() = default;
 
   /// Sets up the test.
   void setUp();
@@ -56,26 +58,43 @@ public:
   /// Cleans up the test.
   void cleanup();
 
-private:
+ private:
   std::vector<RowVectorPtr> generateSortedVectors();
 
   SpillFiles generateSortedSpillFiles(
-    const std::vector<RowVectorPtr>& sortedVectors);
+      const std::vector<RowVectorPtr>& sortedVectors);
 
-  std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
-  generateInputs(size_t numStreams);
+  std::vector<std::vector<std::unique_ptr<SpillReadFile>>> generateInputs(
+      size_t numStreams);
 
   std::unique_ptr<SpillMerger> createSpillMerger(
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>> filesGroup,
       uint64_t numSpillRows) const;
+
+  folly::Future<folly::Unit> produceAsync(
+      MergeSource* mergeSource,
+      BatchStream* batchStream) const;
+
+  std::unique_ptr<SourceMerger> createSourceMerger(
+      const std::vector<std::shared_ptr<MergeSource>>& sources,
+      uint64_t outputBatchSize);
+
+  static std::vector<std::shared_ptr<MergeSource>> createMergeSources(int num);
+
+  static std::vector<RowVectorPtr> getOutputFromSourceMerger(
+      SourceMerger* sourceMerger);
+
+  void createFileStreamAsyncProducers(
+      const std::vector<std::unique_ptr<BatchStream>>& batchStreams,
+      const std::vector<std::shared_ptr<MergeSource>>& sources) const;
 
   const RowTypePtr rowType_ =
       ROW({"c0", "c1", "c2", "c3", "c4"},
           {INTEGER(), BIGINT(), VARCHAR(), VARBINARY(), DOUBLE()});
   const std::vector<column_index_t> sortColumnIndices_{0, 1};
   const std::vector<CompareFlags> sortCompareFlags_{
-    CompareFlags{.ascending = true},
-    CompareFlags{.ascending = false}};
+      CompareFlags{.ascending = true},
+      CompareFlags{.ascending = false}};
   const std::vector<SpillSortKey> sortingKeys_ =
       SpillState::makeSortingKeys(sortColumnIndices_, sortCompareFlags_);
 
@@ -92,9 +111,11 @@ private:
   std::string spillDir_;
   common::SpillConfig spillConfig_;
   std::shared_ptr<filesystems::FileSystem> fs_;
-  std::vector<std::vector<std::unique_ptr<SpillReadFile>>> spillReadFilesGroups_;
+  std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+      spillReadFilesGroups_;
   // Stats.
   uint64_t executionTimeUs_{0};
+  CpuWallTiming timing_;
   folly::Synchronized<common::SpillStats> spillStats_;
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
