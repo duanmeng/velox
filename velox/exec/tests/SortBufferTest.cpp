@@ -126,6 +126,8 @@ class SortBufferTest : public OperatorTestBase,
   folly::Random::DefaultGenerator rng_;
   std::unordered_map<std::string, RuntimeMetric> stats_;
   std::unique_ptr<TestRuntimeStatWriter> statWriter_;
+  const std::shared_ptr<memory::MemoryPool> fuzzerPool_ =
+      memory::memoryManager()->addLeafPool("SortBufferTest");
 };
 
 TEST_P(SortBufferTest, singleKey) {

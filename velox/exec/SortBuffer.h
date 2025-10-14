@@ -83,8 +83,23 @@ class SortBuffer {
 
   void updateEstimatedOutputRowSize();
 
+  void prepareOutputVector(
+      RowVectorPtr& output,
+      const RowTypePtr& outputType,
+      vector_size_t outputBatchSize);
+
   // Invoked to initialize or reset the reusable output buffer to get output.
   void prepareOutput(vector_size_t outputBatchSize);
+
+  void gatherCopyOutput(
+      RowVectorPtr& output,
+      RowVectorPtr& indexOutput,
+      const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
+      uint64_t offset);
+
+  // Sort the pointers to the rows in RowContainer (data_) instead of sorting
+  // the rows.
+  void sortInput(uint64_t numRows);
 
   // Invoked to initialize reader to read the spilled data from storage for
   // output processing.
@@ -110,6 +125,7 @@ class SortBuffer {
   bool hasSpilled() const;
 
   const RowTypePtr input_;
+  std::vector<RowVectorPtr> inputs_;
 
   const std::vector<CompareFlags> sortCompareFlags_;
 
@@ -127,9 +143,13 @@ class SortBuffer {
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
+  const RowTypePtr indexType_{ROW({BIGINT(), BIGINT()})};
+
   // The column projection map between 'input_' and 'spillerStoreType_' as sort
   // buffer stores the sort columns first in 'data_'.
   std::vector<IdentityProjection> columnMap_;
+
+  std::vector<IdentityProjection> indexColumnMap_;
 
   // Indicates no more input. Once it is set, addInput() can't be called on this
   // sort buffer object.
@@ -163,6 +183,7 @@ class SortBuffer {
 
   // Reusable output vector.
   RowVectorPtr output_;
+  RowVectorPtr indexOutput_;
 
   // Estimated size of a single output row by using the max
   // 'data_->estimateRowSize()' across all accumulated data set.

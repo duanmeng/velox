@@ -436,7 +436,7 @@ TEST_F(OrderByTest, outputBatchRows) {
       {1024, 1, 100, 1024},
       // estimated size per row is ~2092, set preferredOutBatchBytes to 20920,
       // so each batch has 10 rows, so it would return 100 batches
-      {1000, 20920, 100, 100},
+      {1000, 22000, 100, 100},
       // same as above, but maxOutBatchRows is 1, so it would return 1000
       // batches
       {1000, 20920, 1, 1000}};
