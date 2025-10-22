@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SortBuffer.h"
+#include "velox/exec/HybridSortBuffer.h"
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -49,8 +49,8 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
 };
 } // namespace
 
-class SortBufferTest : public OperatorTestBase,
-                       public testing::WithParamInterface<bool> {
+class HybridSortBufferTest : public OperatorTestBase,
+                             public testing::WithParamInterface<bool> {
  protected:
   void SetUp() override {
     OperatorTestBase::SetUp();
@@ -119,16 +119,16 @@ class SortBufferTest : public OperatorTestBase,
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency())};
-  const std::shared_ptr<memory::MemoryPool> fuzzerPool_ =
-      memory::memoryManager()->addLeafPool("SortBufferTest");
 
   tsan_atomic<bool> nonReclaimableSection_{false};
   folly::Random::DefaultGenerator rng_;
   std::unordered_map<std::string, RuntimeMetric> stats_;
   std::unique_ptr<TestRuntimeStatWriter> statWriter_;
+  const std::shared_ptr<memory::MemoryPool> fuzzerPool_ =
+      memory::memoryManager()->addLeafPool("HybridSortBufferTest");
 };
 
-TEST_P(SortBufferTest, singleKey) {
+TEST_P(HybridSortBufferTest, singleKey) {
   const RowVectorPtr data = makeRowVector(
       {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 8, 10, 12, 15}),
        makeFlatVector<int32_t>(
@@ -181,7 +181,7 @@ TEST_P(SortBufferTest, singleKey) {
   sortColumnIndices_ = {1};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto sortBuffer = std::make_unique<SortBuffer>(
+    auto sortBuffer = std::make_unique<HybridSortBuffer>(
         inputType_,
         sortColumnIndices_,
         testData.sortCompareFlags,
@@ -216,8 +216,8 @@ TEST_P(SortBufferTest, singleKey) {
   }
 }
 
-TEST_P(SortBufferTest, multipleKeys) {
-  auto sortBuffer = std::make_unique<SortBuffer>(
+TEST_P(HybridSortBufferTest, multipleKeys) {
+  auto sortBuffer = std::make_unique<HybridSortBuffer>(
       inputType_,
       sortColumnIndices_,
       sortCompareFlags_,
@@ -277,7 +277,7 @@ TEST_P(SortBufferTest, multipleKeys) {
 }
 
 // TODO: enable it later with test utility to compare the sorted result.
-TEST_P(SortBufferTest, DISABLED_randomData) {
+TEST_P(HybridSortBufferTest, DISABLED_randomData) {
   struct {
     RowTypePtr inputType;
     std::vector<column_index_t> sortColumnIndices;
@@ -329,7 +329,7 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto sortBuffer = std::make_unique<SortBuffer>(
+    auto sortBuffer = std::make_unique<HybridSortBuffer>(
         testData.inputType,
         testData.sortColumnIndices,
         testData.sortCompareFlags,
@@ -352,7 +352,7 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
   }
 }
 
-TEST_P(SortBufferTest, batchOutput) {
+TEST_P(HybridSortBufferTest, batchOutput) {
   struct {
     bool triggerSpill;
     std::vector<size_t> numInputRows;
@@ -402,7 +402,7 @@ TEST_P(SortBufferTest, batchOutput) {
         "none",
         prefixSortConfig_);
     folly::Synchronized<common::SpillStats> spillStats;
-    auto sortBuffer = std::make_unique<SortBuffer>(
+    auto sortBuffer = std::make_unique<HybridSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
@@ -439,13 +439,13 @@ TEST_P(SortBufferTest, batchOutput) {
       ASSERT_GT(spillStats.rlock()->spilledRows, 0);
       ASSERT_LE(spillStats.rlock()->spilledRows, totalNumInput);
       ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
-      ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
+      ASSERT_GE(spillStats.rlock()->spilledPartitions, 1);
       ASSERT_GT(spillStats.rlock()->spilledFiles, 0);
     }
   }
 }
 
-TEST_P(SortBufferTest, spill) {
+TEST_P(HybridSortBufferTest, spill) {
   struct {
     bool spillEnabled;
     bool memoryReservationFailure;
@@ -495,7 +495,7 @@ TEST_P(SortBufferTest, spill) {
         "none",
         prefixSortConfig_);
     folly::Synchronized<common::SpillStats> spillStats;
-    auto sortBuffer = std::make_unique<SortBuffer>(
+    auto sortBuffer = std::make_unique<HybridSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
@@ -530,11 +530,8 @@ TEST_P(SortBufferTest, spill) {
       ASSERT_GT(spillStats.rlock()->spilledRows, 0);
       ASSERT_LE(spillStats.rlock()->spilledRows, totalNumInput);
       ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
-      ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
-      // SortBuffer shall not respect maxFileSize. Total files should be num
-      // addInput() calls minus one which is the first one that has nothing to
-      // spill.
-      ASSERT_EQ(spillStats.rlock()->spilledFiles, 3);
+      ASSERT_GE(spillStats.rlock()->spilledPartitions, 1);
+      ASSERT_EQ(spillStats.rlock()->spilledFiles, 1024 * 3 / 64);
       sortBuffer.reset();
       ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
       if (memory::spillMemoryPool()->trackUsage()) {
@@ -560,11 +557,11 @@ TEST_P(SortBufferTest, spill) {
   }
 }
 
-DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
+DEBUG_ONLY_TEST_P(HybridSortBufferTest, spillDuringInput) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   const auto spillConfig = getSpillConfig(spillDirectory->getPath());
   folly::Synchronized<common::SpillStats> spillStats;
-  auto sortBuffer = std::make_unique<SortBuffer>(
+  auto sortBuffer = std::make_unique<HybridSortBuffer>(
       inputType_,
       sortColumnIndices_,
       sortCompareFlags_,
@@ -578,15 +575,16 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
   const int numSpilledInputs = 10 / 2;
   std::atomic_int processedInputs{0};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::SortBuffer::addInput",
-      std::function<void(SortBuffer*)>(([&](SortBuffer* sortBuffer) {
-        if (processedInputs++ != numSpilledInputs) {
-          return;
-        }
-        ASSERT_GT(sortBuffer->pool()->usedBytes(), 0);
-        sortBuffer->spill();
-        ASSERT_EQ(sortBuffer->pool()->usedBytes(), 0);
-      })));
+      "facebook::velox::exec::HybridSortBuffer::addInput",
+      std::function<void(HybridSortBuffer*)>(
+          ([&](HybridSortBuffer* sortBuffer) {
+            if (processedInputs++ != numSpilledInputs) {
+              return;
+            }
+            ASSERT_GT(sortBuffer->pool()->usedBytes(), 0);
+            sortBuffer->spill();
+            ASSERT_EQ(sortBuffer->pool()->usedBytes(), 0);
+          })));
 
   VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
 
@@ -603,8 +601,8 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
   ASSERT_GT(spillStats.rlock()->spilledRows, 0);
   ASSERT_EQ(spillStats.rlock()->spilledRows, numInputs * 1024);
   ASSERT_GT(spillStats.rlock()->spilledBytes, 0);
-  ASSERT_EQ(spillStats.rlock()->spilledPartitions, 1);
-  ASSERT_EQ(spillStats.rlock()->spilledFiles, 2);
+  ASSERT_GE(spillStats.rlock()->spilledPartitions, 1);
+  ASSERT_GE(spillStats.rlock()->spilledFiles, 1);
 
   ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
   if (memory::spillMemoryPool()->trackUsage()) {
@@ -614,11 +612,11 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringInput) {
   }
 }
 
-DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
+DEBUG_ONLY_TEST_P(HybridSortBufferTest, spillDuringOutput) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   const auto spillConfig = getSpillConfig(spillDirectory->getPath());
   folly::Synchronized<common::SpillStats> spillStats;
-  auto sortBuffer = std::make_unique<SortBuffer>(
+  auto sortBuffer = std::make_unique<HybridSortBuffer>(
       inputType_,
       sortColumnIndices_,
       sortCompareFlags_,
@@ -630,12 +628,13 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
 
   const int numInputs = 10;
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::SortBuffer::noMoreInput",
-      std::function<void(SortBuffer*)>(([&](SortBuffer* sortBuffer) {
-        ASSERT_GT(sortBuffer->pool()->usedBytes(), 0);
-        sortBuffer->spill();
-        ASSERT_EQ(sortBuffer->pool()->usedBytes(), 0);
-      })));
+      "facebook::velox::exec::HybridSortBuffer::noMoreInput",
+      std::function<void(HybridSortBuffer*)>(
+          ([&](HybridSortBuffer* sortBuffer) {
+            ASSERT_GT(sortBuffer->pool()->usedBytes(), 0);
+            sortBuffer->spill();
+            ASSERT_EQ(sortBuffer->pool()->usedBytes(), 0);
+          })));
   VectorFuzzer fuzzer({.vectorSize = 1024}, fuzzerPool_.get());
 
   ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
@@ -662,14 +661,14 @@ DEBUG_ONLY_TEST_P(SortBufferTest, spillDuringOutput) {
   }
 }
 
-DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySortGetOutput) {
+DEBUG_ONLY_TEST_P(HybridSortBufferTest, reserveMemorySortGetOutput) {
   for (bool spillEnabled : {false, true}) {
     SCOPED_TRACE(fmt::format("spillEnabled {}", spillEnabled));
 
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     const auto spillConfig = getSpillConfig(spillDirectory->getPath());
     folly::Synchronized<common::SpillStats> spillStats;
-    auto sortBuffer = std::make_unique<SortBuffer>(
+    auto sortBuffer = std::make_unique<HybridSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
@@ -687,9 +686,9 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySortGetOutput) {
 
     std::atomic_bool noMoreInput{false};
     SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::SortBuffer::noMoreInput",
-        std::function<void(SortBuffer*)>(
-            ([&](SortBuffer* sortBuffer) { noMoreInput.store(true); })));
+        "facebook::velox::exec::HybridSortBuffer::noMoreInput",
+        std::function<void(HybridSortBuffer*)>(
+            ([&](HybridSortBuffer* sortBuffer) { noMoreInput.store(true); })));
 
     std::atomic_int numReserves{0};
     SCOPED_TESTVALUE_SET(
@@ -713,7 +712,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySortGetOutput) {
   }
 }
 
-DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
+DEBUG_ONLY_TEST_P(HybridSortBufferTest, reserveMemorySort) {
   struct {
     bool usePrefixSort;
     bool spillEnabled;
@@ -728,7 +727,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath(), usePrefixSort);
     folly::Synchronized<common::SpillStats> spillStats;
-    auto sortBuffer = std::make_unique<SortBuffer>(
+    auto sortBuffer = std::make_unique<HybridSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
@@ -738,10 +737,7 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
         spillEnabled ? &spillConfig : nullptr,
         &spillStats);
 
-    const std::shared_ptr<memory::MemoryPool> spillSource =
-        memory::memoryManager()->addLeafPool("spillSource");
-    VectorFuzzer fuzzer({.vectorSize = 100}, spillSource.get());
-
+    VectorFuzzer fuzzer({.vectorSize = 100}, fuzzerPool_.get());
     TestScopedSpillInjection scopedSpillInjection(0);
     sortBuffer->addInput(fuzzer.fuzzRow(inputType_));
 
@@ -764,13 +760,13 @@ DEBUG_ONLY_TEST_P(SortBufferTest, reserveMemorySort) {
   }
 }
 
-TEST_P(SortBufferTest, emptySpill) {
+TEST_P(HybridSortBufferTest, emptySpill) {
   for (bool hasPostSpillData : {false, true}) {
     SCOPED_TRACE(fmt::format("hasPostSpillData {}", hasPostSpillData));
     auto spillDirectory = exec::test::TempDirectoryPath::create();
     auto spillConfig = getSpillConfig(spillDirectory->getPath());
     folly::Synchronized<common::SpillStats> spillStats;
-    auto sortBuffer = std::make_unique<SortBuffer>(
+    auto sortBuffer = std::make_unique<HybridSortBuffer>(
         inputType_,
         sortColumnIndices_,
         sortCompareFlags_,
@@ -791,7 +787,7 @@ TEST_P(SortBufferTest, emptySpill) {
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
-    SortBufferTest,
-    SortBufferTest,
+    HybridSortBufferTest,
+    HybridSortBufferTest,
     testing::ValuesIn({false, true}));
 } // namespace facebook::velox::functions::test

@@ -15,10 +15,8 @@
  */
 
 #include "SortBuffer.h"
-
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Spiller.h"
-#include "velox/expression/VectorReaders.h"
 
 namespace facebook::velox::exec {
 
@@ -62,38 +60,26 @@ SortBuffer::SortBuffer(
     sortedSpillColumnNames.emplace_back(input->nameOf(sortColumnIndices.at(i)));
     sortedChannelSet.emplace(sortColumnIndices.at(i));
   }
-
-  if (canSpill()) {
-    // Non-sorted key columns.
-    for (column_index_t i = 0, nonSortedIndex = sortCompareFlags_.size();
-         i < input_->size();
-         ++i) {
-      if (sortedChannelSet.count(i) != 0) {
-        continue;
-      }
-      columnMap_.emplace_back(nonSortedIndex++, i);
-      nonSortedColumnTypes.emplace_back(input_->childAt(i));
-      sortedSpillColumnTypes.emplace_back(input_->childAt(i));
-      sortedSpillColumnNames.emplace_back(input->nameOf(i));
+  // Non-sorted key columns.
+  for (column_index_t i = 0, nonSortedIndex = sortCompareFlags_.size();
+       i < input_->size();
+       ++i) {
+    if (sortedChannelSet.count(i) != 0) {
+      continue;
     }
-
-    data_ = std::make_unique<RowContainer>(
-        sortedColumnTypes, nonSortedColumnTypes, pool_);
-    spillerStoreType_ = ROW(
-        std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
-  } else {
-    // Vector index and row index columns
-    const auto numSortKeys = columnMap_.size();
-    for (auto i = 0; i < indexType_->size(); ++i) {
-      indexColumnMap_.emplace_back(numSortKeys + i, i);
-    }
-    data_ = std::make_unique<RowContainer>(
-        sortedColumnTypes, indexType_->children(), pool_);
+    columnMap_.emplace_back(nonSortedIndex++, i);
+    nonSortedColumnTypes.emplace_back(input_->childAt(i));
+    sortedSpillColumnTypes.emplace_back(input_->childAt(i));
+    sortedSpillColumnNames.emplace_back(input->nameOf(i));
   }
+
+  data_ = std::make_unique<RowContainer>(
+      sortedColumnTypes, nonSortedColumnTypes, pool_);
+  spillerStoreType_ =
+      ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
 
 SortBuffer::~SortBuffer() {
-  inputs_.clear();
   pool_->release();
 }
 
@@ -118,41 +104,7 @@ void SortBuffer::addInput(const VectorPtr& input) {
         folly::Range(rows.data(), input->size()),
         columnProjection.inputChannel);
   }
-
-  if (!canSpill()) {
-    VELOX_CHECK_EQ(input->encoding(), VectorEncoding::Simple::ROW);
-    inputs_.push_back(std::static_pointer_cast<RowVector>(input));
-    const auto vectorIndex = std::make_shared<ConstantVector<int64_t>>(
-        pool(),
-        input->size(),
-        false, // isNull
-        BIGINT(),
-        inputs_.size() - 1);
-    DecodedVector decoded;
-    decoded.decode(*vectorIndex, allRows);
-    const auto numSortKeys = columnMap_.size();
-    data_->store(
-        decoded, folly::Range(rows.data(), input->size()), numSortKeys);
-
-    const auto rowIndex = BaseVector::create<FlatVector<int64_t>>(
-        BIGINT(), input->size(), pool());
-    for (int64_t i = 0; i < input->size(); ++i) {
-      rowIndex->set(i, i);
-    }
-    decoded.decode(*rowIndex, allRows);
-    data_->store(
-        decoded, folly::Range(rows.data(), input->size()), numSortKeys + 1);
-  }
-
   numInputRows_ += allRows.size();
-}
-
-void SortBuffer::sortInput(uint64_t numRows) {
-  sortedRows_.resize(numRows);
-  RowContainerIterator iter;
-  data_->listRows(&iter, numRows, sortedRows_.data());
-  PrefixSort::sort(
-      data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
 }
 
 void SortBuffer::noMoreInput() {
@@ -174,7 +126,13 @@ void SortBuffer::noMoreInput() {
   if (inputSpiller_ == nullptr) {
     VELOX_CHECK_EQ(numInputRows_, data_->numRows());
     updateEstimatedOutputRowSize();
-    sortInput(numInputRows_);
+    // Sort the pointers to the rows in RowContainer (data_) instead of sorting
+    // the rows.
+    sortedRows_.resize(numInputRows_);
+    RowContainerIterator iter;
+    data_->listRows(&iter, numInputRows_, sortedRows_.data());
+    PrefixSort::sort(
+        data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
   } else {
     // Spill the remaining in-memory state to disk if spilling has been
     // triggered on this sort buffer. This is to simplify query OOM prevention
@@ -372,17 +330,9 @@ void SortBuffer::ensureSortFits() {
 }
 
 void SortBuffer::updateEstimatedOutputRowSize() {
-  std::optional<int64_t> optionalRowSize;
-  if (canSpill()) {
-    optionalRowSize = data_->estimateRowSize();
-    if (!optionalRowSize.has_value() || optionalRowSize.value() == 0) {
-      return;
-    }
-  } else {
-    if (inputs_.empty() || inputs_[0]->size() == 0) {
-      return;
-    }
-    optionalRowSize = inputs_[0]->estimateFlatSize() / inputs_[0]->size();
+  const auto optionalRowSize = data_->estimateRowSize();
+  if (!optionalRowSize.has_value() || optionalRowSize.value() == 0) {
+    return;
   }
 
   const auto rowSize = optionalRowSize.value();
@@ -429,27 +379,19 @@ void SortBuffer::spillOutput() {
   finishSpill();
 }
 
-void SortBuffer::prepareOutputVector(
-    RowVectorPtr& output,
-    const RowTypePtr& outputType,
-    vector_size_t outputBatchSize) {
-  if (output != nullptr) {
-    VectorPtr vector = std::move(output);
-    BaseVector::prepareForReuse(vector, outputBatchSize);
-    output = std::static_pointer_cast<RowVector>(vector);
-  } else {
-    output = std::static_pointer_cast<RowVector>(
-        BaseVector::create(outputType, outputBatchSize, pool_));
-  }
-
-  for (const auto& child : output->children()) {
-    child->resize(outputBatchSize);
-  }
-}
-
 void SortBuffer::prepareOutput(vector_size_t batchSize) {
-  prepareOutputVector(output_, input_, batchSize);
-  prepareOutputVector(indexOutput_, indexType_, batchSize);
+  if (output_ != nullptr) {
+    VectorPtr output = std::move(output_);
+    BaseVector::prepareForReuse(output, batchSize);
+    output_ = std::static_pointer_cast<RowVector>(output);
+  } else {
+    output_ = std::static_pointer_cast<RowVector>(
+        BaseVector::create(input_, batchSize, pool_));
+  }
+
+  for (auto& child : output_->children()) {
+    child->resize(batchSize);
+  }
 
   if (hasSpilled()) {
     spillSources_.resize(batchSize);
@@ -461,56 +403,14 @@ void SortBuffer::prepareOutput(vector_size_t batchSize) {
   VELOX_CHECK_LE(output_->size() + numOutputRows_, numInputRows_);
 }
 
-void SortBuffer::gatherCopyOutput(
-    RowVectorPtr& output,
-    RowVectorPtr& indexOutput,
-    const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
-    uint64_t offset) {
-  for (const auto& columnProjection : indexColumnMap_) {
-    data_->extractColumn(
-        sortedRows.data() + offset,
-        indexOutput->size(),
-        columnProjection.inputChannel,
-        indexOutput->childAt(columnProjection.outputChannel));
-  }
-
-  std::vector<const RowVector*> sources;
-  sources.reserve(indexOutput->size());
-  std::vector<vector_size_t> sourceIndices;
-  sourceIndices.reserve(indexOutput->size());
-
-  const SelectivityVector rows{indexOutput->size()};
-  DecodedVector decoded;
-  decoded.decode(*indexOutput->childAt(0), rows);
-  const VectorReader<int64_t> vectorIndexReader(&decoded);
-  rows.applyToSelected([&](vector_size_t row) {
-    const auto index = vectorIndexReader.readNullFree(row);
-    sources.push_back(inputs_[index].get());
-  });
-
-  decoded.decode(*indexOutput->childAt(1), rows);
-  VectorReader<int64_t> rowIndexReader(&decoded);
-  rows.applyToSelected([&](vector_size_t row) {
-    const auto index = rowIndexReader.readNullFree(row);
-    sourceIndices.push_back(index);
-  });
-
-  gatherCopy(output.get(), 0, output->size(), sources, sourceIndices);
-}
-
 void SortBuffer::getOutputWithoutSpill() {
   VELOX_DCHECK_EQ(numInputRows_, sortedRows_.size());
-
-  if (canSpill()) {
-    for (const auto& columnProjection : columnMap_) {
-      data_->extractColumn(
-          sortedRows_.data() + numOutputRows_,
-          output_->size(),
-          columnProjection.inputChannel,
-          output_->childAt(columnProjection.outputChannel));
-    }
-  } else {
-    gatherCopyOutput(output_, indexOutput_, sortedRows_, numOutputRows_);
+  for (const auto& columnProjection : columnMap_) {
+    data_->extractColumn(
+        sortedRows_.data() + numOutputRows_,
+        output_->size(),
+        columnProjection.inputChannel,
+        output_->childAt(columnProjection.outputChannel));
   }
   numOutputRows_ += output_->size();
 }
