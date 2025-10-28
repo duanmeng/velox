@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/LocalPlanner.h"
+
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
@@ -51,6 +52,7 @@
 #include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Unnest.h"
 #include "velox/exec/Values.h"
+#include "velox/exec/VectorGrouping.h"
 #include "velox/exec/Window.h"
 
 namespace facebook::velox::exec {
@@ -693,6 +695,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(
           std::make_unique<trace::OperatorTraceScan>(
               id, ctx.get(), traceScanNode));
+    } else if (
+        const auto vectorGroupingNode =
+            std::dynamic_pointer_cast<const core::VectorGroupingNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<VectorGrouping>(id, ctx.get(), vectorGroupingNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {
