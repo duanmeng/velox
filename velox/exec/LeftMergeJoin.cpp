@@ -16,17 +16,13 @@
 /*
  * Simplified and optimized Left Merge Join under strict input guarantees.
  *
- * Assumptions (MUST hold, otherwise VELOX_CHECK fails or behavior is
- * undefined):
- *  - Left side:
- *      * Within a RowVector (batch), all rows share the same join key.
- *      * Across RowVectors, join keys are distinct and strictly increasing.
- *  - Right side:
- *      * Join keys are globally unique and strictly increasing.
- *      * Within a RowVector, keys are distinct and increasing.
+ * Assumptions (MUST hold):
+ *  - Left: within a RowVector, all rows share the same join key; across
+ * RowVectors, keys strictly increase.
+ *  - Right: join keys are globally unique and strictly increasing; within a
+ * RowVector, keys are distinct and increasing.
+ *  - Join keys never NULL on both sides.
  *  - Join type: LEFT ONLY.
- *  - Right rows with NULL in any join key are skipped by the source (not
- * compared).
  *  - Output per call strictly equals current left batch size (dynamic
  * capacity).
  *
@@ -46,7 +42,8 @@ namespace facebook::velox::exec {
 
 namespace {
 
-// Build a single-element null base vector for a given type.
+// Build a single-element null base vector for a given type (used for R > L or
+// right exhausted).
 VectorPtr makeSingleNullBase(const TypePtr& type, memory::MemoryPool* pool) {
   auto base = BaseVector::create(type, 1, pool);
   base->setNull(0, true);
@@ -129,8 +126,7 @@ void LeftMergeJoin::addInput(RowVectorPtr input) {
   leftRowIndex_ = 0;
 }
 
-// Compare join key at (batch,index) vs (otherBatch,otherIndex).
-// equalsOnly; NULL-as-indeterminate (NULL != anything).
+// >0 => left > right (R < L); <0 => left < right (R > L)
 int32_t LeftMergeJoin::compareKey(
     const std::vector<column_index_t>& keyChannels,
     const RowVectorPtr& batch,
@@ -138,10 +134,6 @@ int32_t LeftMergeJoin::compareKey(
     const std::vector<column_index_t>& otherKeyChannels,
     const RowVectorPtr& otherBatch,
     vector_size_t otherIndex) {
-  static const CompareFlags kFlags = {
-      .equalsOnly = true,
-      .nullHandlingMode = CompareFlags::NullHandlingMode::kNullAsIndeterminate};
-
   const auto n = keyChannels.size();
   for (size_t i = 0; i < n; ++i) {
     const auto cmp = batch->childAt(keyChannels[i])
@@ -149,12 +141,8 @@ int32_t LeftMergeJoin::compareKey(
                              otherBatch->childAt(otherKeyChannels[i]).get(),
                              index,
                              otherIndex,
-                             kFlags);
-    if (!cmp.has_value()) {
-      // NULL in either side => not equal (treat as "less than / not equal" to
-      // drive logic)
-      return -1;
-    }
+                             CompareFlags{});
+    VELOX_CHECK(cmp.has_value());
     if (cmp.value() != 0) {
       return cmp.value();
     }
@@ -167,8 +155,6 @@ bool LeftMergeJoin::prepareOutputConstantRight(
     const RowVectorPtr& right,
     bool matched,
     vector_size_t rightRowIndex) {
-  // Strong contract: must be called only when starting a fresh output for
-  // current left batch.
   VELOX_CHECK_NULL(
       output_, "prepareOutputConstantRight must start a fresh output.");
   VELOX_CHECK_NOT_NULL(left);
@@ -190,8 +176,6 @@ bool LeftMergeJoin::prepareOutputConstantRight(
   currentLeft_ = left;
 
   // Right columns:
-  //  - matched: Constant wrapping (capacity, rightRowIndex, right child).
-  //  - unmatched: Constant NULL (wrap to a single-null base).
   for (const auto& proj : rightProjections_) {
     const auto outType = outputType_->childAt(proj.outputChannel);
     if (matched) {
@@ -211,7 +195,7 @@ bool LeftMergeJoin::prepareOutputConstantRight(
   output_ = std::make_shared<RowVector>(
       operatorCtx_->pool(), outputType_, nullptr, capacity, std::move(columns));
   outputSize_ = 0;
-  return false; // never ask to flush-before-write in strong-contract mode
+  return false;
 }
 
 bool LeftMergeJoin::tryAddLeftIndex(vector_size_t leftRow) {
@@ -235,7 +219,6 @@ bool LeftMergeJoin::getNextFromRightSide() {
         operatorCtx_->driverCtx()->splitGroupId, planNodeId());
   }
 
-  // Strong-contract: no drain path; we just pull next when needed.
   while (!noMoreRightInput_ && !rightInput_) {
     bool drained = false;
     const auto br =
@@ -243,43 +226,18 @@ bool LeftMergeJoin::getNextFromRightSide() {
     if (br != BlockingReason::kNotBlocked) {
       return false; // blocked on right
     }
-    if (rightInput_) {
-      // Position to the first row whose all join keys are non-null.
-      rightRowIndex_ = firstNonNullKey(rightInput_, rightKeyChannels_, 0);
-      if (rightRowIndex_ == rightInput_->size()) {
-        rightInput_.reset();
-      }
-    } else {
+    if (!rightInput_) {
       noMoreRightInput_ = true;
+    } else {
+      // No NULL filtering: keys guaranteed non-null by contract.
+      rightRowIndex_ = 0;
     }
   }
   return true;
 }
 
-vector_size_t LeftMergeJoin::firstNonNullKey(
-    const RowVectorPtr& rowVector,
-    const std::vector<column_index_t>& keys,
-    vector_size_t start) {
-  if (!rowVector) {
-    return 0;
-  }
-  for (auto row = start; row < rowVector->size(); ++row) {
-    bool hasNull = false;
-    for (auto key : keys) {
-      if (rowVector->childAt(key)->isNullAt(row)) {
-        hasNull = true;
-        break;
-      }
-    }
-    if (!hasNull) {
-      return row;
-    }
-  }
-  return rowVector->size();
-}
-
 RowVectorPtr LeftMergeJoin::doGetOutput() {
-  // If no current left batch, nothing to produce: let Driver feed next left.
+  // If no current left batch, nothing to produce.
   if (!input_) {
     return nullptr;
   }
@@ -299,51 +257,27 @@ RowVectorPtr LeftMergeJoin::doGetOutput() {
     return produceOutput();
   }
 
-  // Need right input? getOutput() outer loop is responsible for pulling; we
-  // just return nullptr.
+  // Need right input? let outer getOutput() pull it.
   if (!rightInput_) {
     return nullptr;
   }
 
-  // Left batch key: use row 0 (all rows share the same key).
+  // Left batch key: use row 0 (all rows share the same key). No NULL check by
+  // contract.
   const auto leftKeyRow = 0;
-  bool leftKeyHasNull = false;
-  for (auto k : leftKeyChannels_) {
-    if (input_->childAt(k)->isNullAt(leftKeyRow)) {
-      leftKeyHasNull = true;
-      break;
-    }
-  }
 
-  if (leftKeyHasNull) {
-    // Entire left batch has NULL key => left-only with constant NULL right.
-    VELOX_CHECK_NULL(output_);
-    prepareOutputConstantRight(input_, /*right*/ nullptr, /*matched*/ false, 0);
-
-    const auto leftSize = input_->size();
-    while (leftRowIndex_ < leftSize) {
-      tryAddLeftIndex(leftRowIndex_);
-      ++leftRowIndex_;
-    }
-
-    clearLeftInput();
-    return produceOutput();
-  }
-
-  // Advance right cursor until rightKey >= leftKey (monotonic advance, never
-  // rewind).
+  // Advance right cursor until rightKey >= leftKey.
+  int32_t cmp = 0;
   while (true) {
-    if (!rightInput_) {
-      return nullptr; // outer will fetch next right batch
-    }
-    const auto cmp = compareKey(
+    // rightInput_ must exist here; if consumed, outer loop pulls next batch.
+    cmp = compareKey(
         leftKeyChannels_,
         input_,
         leftKeyRow,
         rightKeyChannels_,
         rightInput_,
         rightRowIndex_);
-    if (cmp > 0) { // R < L
+    if (cmp > 0) { // left > right => R < L: advance right
       ++rightRowIndex_;
       if (rightRowIndex_ >= rightInput_->size()) {
         clearRightInput();
@@ -355,13 +289,7 @@ RowVectorPtr LeftMergeJoin::doGetOutput() {
     break;
   }
 
-  const bool matched = compareKey(
-                           leftKeyChannels_,
-                           input_,
-                           leftKeyRow,
-                           rightKeyChannels_,
-                           rightInput_,
-                           rightRowIndex_) == 0;
+  const bool matched = (cmp == 0);
 
   // Prepare output (right as constant values or constant NULL).
   VELOX_CHECK_NULL(output_);

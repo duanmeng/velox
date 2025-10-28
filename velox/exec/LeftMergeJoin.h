@@ -13,31 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * Simplified and optimized Left Merge Join under strict input guarantees.
- *
- * Assumptions (MUST hold):
- *  - Left side:
- *      * Within a RowVector (batch), all rows share the same join key.
- *      * Across RowVectors, join keys are distinct and strictly increasing.
- *  - Right side:
- *      * Join keys are globally unique and strictly increasing.
- *      * Within a RowVector, keys are distinct and increasing.
- *  - Join type: LEFT ONLY.
- *  - Right rows with NULL in any join key are skipped by the source (not
- * compared).
- *  - Each getOutput() returns a RowVector whose size strictly equals the
- *    current left input RowVector size (dynamic capacity).
- *
- * Key optimization:
- *  - Matched (R == L): right projections are Constant-encoded (wrapInConstant)
- *    referencing the single matching right row (zero-copy).
- *  - Unmatched (R > L or right exhausted): right projections are constant NULL.
- *
- * Unsupported:
- *  - Filters, Inner/Right/Full/Semi/Anti joins, drain-related APIs.
- */
-
 #pragma once
 
 #include "velox/exec/MergeSource.h"
@@ -45,6 +20,26 @@
 
 namespace facebook::velox::exec {
 
+// Simplified and optimized Left Merge Join under strict input guarantees.
+// Assumptions (MUST hold):
+//  - Left side:
+//      * Within a RowVector (batch), all rows share the same join key.
+//      * Across RowVectors, join keys are distinct and strictly increasing.
+//  - Right side:
+//      * Join keys are globally unique and strictly increasing.
+//      * Within a RowVector, keys are distinct and increasing.
+//  - Join keys never NULL on both sides.
+//  - Join type: LEFT ONLY.
+//  - Each getOutput() returns a RowVector whose size strictly equals the
+//    current left input RowVector size (dynamic capacity).
+//
+// Key optimization:
+//  - Matched (R == L): right projections are Constant-encoded (wrapInConstant)
+//    referencing the single matching right row (zero-copy).
+//  - Unmatched (R > L or right exhausted): right projections are constant NULL.
+//
+// Unsupported:
+//  - Filters, Inner/Right/Full/Semi/Anti joins, drain-related APIs.
 class LeftMergeJoin : public Operator {
  public:
   LeftMergeJoin(
@@ -66,7 +61,7 @@ class LeftMergeJoin : public Operator {
 
  private:
   // Compare join key at (batch,index) vs (otherBatch,otherIndex).
-  // equalsOnly; NULL-as-indeterminate (NULL != anything).
+  // equalsOnly, no NULLs by contract.
   static int32_t compareKey(
       const std::vector<column_index_t>& keyChannels,
       const RowVectorPtr& batch,
@@ -109,12 +104,6 @@ class LeftMergeJoin : public Operator {
   // Main output routine: produce one full-batch output for the current left
   // batch.
   RowVectorPtr doGetOutput();
-
-  // Find first non-null-key row in 'rowVector' starting at 'start'.
-  static vector_size_t firstNonNullKey(
-      const RowVectorPtr& rowVector,
-      const std::vector<column_index_t>& keys,
-      vector_size_t start = 0);
 
   // Utilities.
   void clearLeftInput() {
