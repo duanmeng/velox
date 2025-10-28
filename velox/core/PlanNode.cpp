@@ -3781,4 +3781,10 @@ void EqualIndexLookupCondition::validate() const {
       key->type()->toString(),
       value->type()->toString());
 }
+
+void VectorGroupingNode::addDetails(std::stringstream& stream) const {
+  stream << "[";
+  addFields(stream, keys_);
+  stream << "]";
+}
 } // namespace facebook::velox::core

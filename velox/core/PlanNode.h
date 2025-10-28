@@ -5531,6 +5531,46 @@ class PlanNodeVisitor {
   }
 };
 
+class VectorGroupingNode : public PlanNode {
+ public:
+  VectorGroupingNode(
+      const PlanNodeId& id,
+      const PlanNodePtr& source,
+      const std::vector<FieldAccessTypedExprPtr>& keys,
+      int32_t maxInputHolded)
+      : PlanNode(id),
+        sources_{source},
+        keys_(keys),
+        maxInputHolded_(maxInputHolded) {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& keys() const {
+    return keys_;
+  }
+
+  std::string_view name() const override {
+    return "VectorGrouping";
+  }
+
+  int32_t maxInputHolded() const {
+    return maxInputHolded_;
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<PlanNodePtr> sources_;
+  const std::vector<FieldAccessTypedExprPtr> keys_;
+  const int32_t maxInputHolded_;
+};
+
 } // namespace facebook::velox::core
 
 template <>

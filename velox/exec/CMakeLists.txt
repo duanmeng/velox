@@ -102,6 +102,7 @@ velox_add_library(
   TraceUtil.cpp
   Unnest.cpp
   Values.cpp
+  VectorGrouping.cpp
   VectorHasher.cpp
   Window.cpp
   WindowBuild.cpp

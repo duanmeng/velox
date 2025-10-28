@@ -1457,6 +1457,10 @@ class PlanBuilder {
       std::string markerKey,
       const std::vector<std::string>& distinctKeys);
 
+  PlanBuilder& vectorGrouping(
+      const std::vector<std::string>& keys,
+      int32_t maxInputHolded = 3);
+
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use
   /// when adding splits at runtime.

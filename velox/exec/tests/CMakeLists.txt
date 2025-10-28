@@ -105,6 +105,7 @@ add_executable(
   UnnestTest.cpp
   UnorderedStreamReaderTest.cpp
   ValuesTest.cpp
+  VectorGroupingTest.cpp
   VectorHasherTest.cpp
   WindowFunctionRegistryTest.cpp
   WindowTest.cpp

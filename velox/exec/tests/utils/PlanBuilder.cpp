@@ -2432,6 +2432,14 @@ PlanBuilder& PlanBuilder::markDistinct(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::vectorGrouping(
+    const std::vector<std::string>& keys,
+    int32_t maxInputHolded) {
+  planNode_ = std::make_shared<core::VectorGroupingNode>(
+      nextPlanNodeId(), planNode_, fields(keys), maxInputHolded);
+  return *this;
+}
+
 core::PlanNodeId PlanBuilder::nextPlanNodeId() {
   return planNodeIdGenerator_->next();
 }
