@@ -46,6 +46,7 @@ velox_add_library(
   HashTable.cpp
   IndexLookupJoin.cpp
   JoinBridge.cpp
+  LeftMergeJoin.cpp
   Limit.cpp
   LocalPartition.cpp
   LocalPlanner.cpp
