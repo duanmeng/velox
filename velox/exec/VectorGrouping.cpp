@@ -16,6 +16,8 @@
 
 #include "velox/exec/VectorGrouping.h"
 
+#include "OperatorUtils.h"
+
 namespace facebook::velox::exec {
 bool VectorGrouping::equal(
     const RowVectorPtr& vector,
@@ -63,6 +65,7 @@ VectorGrouping::VectorGrouping(
 }
 
 void VectorGrouping::addInput(RowVectorPtr input) {
+  loadColumns(input, *operatorCtx_->execCtx());
   std::vector<RowVectorPtr> slices;
   const auto numRows = input->size();
   VELOX_CHECK_GT(numRows, 0);
@@ -108,26 +111,16 @@ void VectorGrouping::addInput(RowVectorPtr input) {
   for (; index < slices.size(); ++index) {
     inputs_.push_back(std::move(slices[index]));
   }
-  LOG(ERROR) << "VectorGrouping addInput " << inputs_.size();
 }
 
 bool VectorGrouping::needsInput() const {
-  LOG(ERROR) << "VectorGrouping needsInput " << inputs_.size();
-  const auto res = !noMoreInput_ && inputs_.size() < maxInputHolded_;
-  if (inputs_.size() >= maxInputHolded_) {
-    LOG(ERROR) << "VectorGrouping needsInput " << inputs_.size();
-  }
-  if (!res) {
-    LOG(ERROR) << "VectorGrouping needsInput " << inputs_.size();
-  }
-  return res;
+  return !noMoreInput_ && inputs_.size() < maxInputHolded_;
 }
 
 // If there’s only one buffered slice, emit it only after `noMoreInput_` is
 // true. This avoids emitting a slice that might be extended by the next batch
 // (same key).
 RowVectorPtr VectorGrouping::getOutput() {
-  // LOG(ERROR) << "VectorGrouping getOutput " << inputs_.size();
   if (inputs_.empty()) {
     return nullptr;
   }

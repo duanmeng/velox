@@ -3286,6 +3286,69 @@ class MergeJoinNode : public AbstractJoinNode {
 
 using MergeJoinNodePtr = std::shared_ptr<const MergeJoinNode>;
 
+class LeftMergeJoinNode : public AbstractJoinNode {
+ public:
+  LeftMergeJoinNode(
+      const PlanNodeId& id,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+      PlanNodePtr left,
+      PlanNodePtr right,
+      RowTypePtr outputType);
+
+  class Builder : public AbstractJoinNode::Builder<LeftMergeJoinNode, Builder> {
+   public:
+    Builder() = default;
+
+    explicit Builder(const LeftMergeJoinNode& other)
+        : AbstractJoinNode::Builder<LeftMergeJoinNode, Builder>(other) {}
+
+    std::shared_ptr<LeftMergeJoinNode> build() const {
+      VELOX_USER_CHECK(id_.has_value(), "MergeJoinNode id is not set");
+      VELOX_USER_CHECK(
+          joinType_.has_value(), "MergeJoinNode joinType is not set");
+      VELOX_USER_CHECK(
+          leftKeys_.has_value(), "MergeJoinNode leftKeys is not set");
+      VELOX_USER_CHECK(
+          rightKeys_.has_value(), "MergeJoinNode rightKeys is not set");
+      VELOX_USER_CHECK(
+          left_.has_value(), "MergeJoinNode left source is not set");
+      VELOX_USER_CHECK(
+          right_.has_value(), "MergeJoinNode right source is not set");
+      VELOX_USER_CHECK(
+          outputType_.has_value(), "MergeJoinNode outputType is not set");
+
+      return std::make_shared<LeftMergeJoinNode>(
+          id_.value(),
+          leftKeys_.value(),
+          rightKeys_.value(),
+          left_.value(),
+          right_.value(),
+          outputType_.value());
+    }
+  };
+
+  std::string_view name() const override {
+    return "LeftMergeJoin";
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  folly::dynamic serialize() const override;
+
+  bool supportsBarrier() const override {
+    return false;
+  }
+
+  /// Returns true if the merge join supports this join type, otherwise false.
+  static bool isSupported(JoinType joinType);
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+};
+
+using LeftMergeJoinNodePtr = std::shared_ptr<const LeftMergeJoinNode>;
+
 struct IndexLookupCondition : public ISerializable {
   /// References to an index table column.
   FieldAccessTypedExprPtr key;

@@ -1734,6 +1734,69 @@ PlanNodePtr MergeJoinNode::create(const folly::dynamic& obj, void* context) {
       outputType);
 }
 
+LeftMergeJoinNode::LeftMergeJoinNode(
+    const PlanNodeId& id,
+    const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+    PlanNodePtr left,
+    PlanNodePtr right,
+    RowTypePtr outputType)
+    : AbstractJoinNode(
+          id,
+          JoinType::kLeft,
+          leftKeys,
+          rightKeys,
+          nullptr,
+          std::move(left),
+          std::move(right),
+          std::move(outputType)) {
+  validate();
+  VELOX_USER_CHECK(
+      isSupported(joinType_),
+      "The join type is not supported by merge join: {}",
+      JoinTypeName::toName(joinType_));
+}
+
+folly::dynamic LeftMergeJoinNode::serialize() const {
+  return serializeBase();
+}
+
+// static
+bool LeftMergeJoinNode::isSupported(JoinType joinType) {
+  switch (joinType) {
+    case JoinType::kLeft:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void LeftMergeJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+// static
+PlanNodePtr LeftMergeJoinNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(2, sources.size());
+
+  auto leftKeys = deserializeFields(obj["leftKeys"], context);
+  auto rightKeys = deserializeFields(obj["rightKeys"], context);
+  auto outputType = deserializeRowType(obj["outputType"]);
+
+  return std::make_shared<LeftMergeJoinNode>(
+      deserializePlanNodeId(obj),
+      std::move(leftKeys),
+      std::move(rightKeys),
+      sources[0],
+      sources[1],
+      outputType);
+}
+
 IndexLookupJoinNode::IndexLookupJoinNode(
     const PlanNodeId& id,
     JoinType joinType,
