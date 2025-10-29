@@ -28,6 +28,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/IndexLookupJoin.h"
+#include "velox/exec/LeftMergeJoin.h"
 #include "velox/exec/Limit.h"
 #include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
@@ -209,6 +210,27 @@ OperatorSupplier makeOperatorSupplier(
     };
   }
 
+  if (auto join =
+          std::dynamic_pointer_cast<const core::LeftMergeJoinNode>(planNode)) {
+    auto planNodeId = planNode->id();
+    return [planNodeId](int32_t operatorId, DriverCtx* ctx) {
+      auto source =
+          ctx->task->getMergeJoinSource(ctx->splitGroupId, planNodeId);
+      auto consumer =
+          [source](RowVectorPtr input, bool drained, ContinueFuture* future) {
+            if (drained) {
+              VELOX_CHECK_NULL(input);
+              source->drain();
+              return BlockingReason::kNotBlocked;
+            } else {
+              VELOX_CHECK(!drained);
+              return source->enqueue(std::move(input), future);
+            }
+          };
+      return std::make_unique<CallbackSink>(operatorId, ctx, consumer);
+    };
+  }
+
   return Operator::operatorSupplierFromPlanNode(planNode);
 }
 
@@ -250,6 +272,10 @@ uint32_t maxDriversForConsumer(
     const std::shared_ptr<const core::PlanNode>& node) {
   if (std::dynamic_pointer_cast<const core::MergeJoinNode>(node)) {
     // MergeJoinNode must run single-threaded.
+    return 1;
+  }
+  if (std::dynamic_pointer_cast<const core::LeftMergeJoinNode>(node)) {
+    // LeftMergeJoinNode must run single-threaded.
     return 1;
   }
   return std::numeric_limits<uint32_t>::max();
@@ -311,6 +337,9 @@ uint32_t maxDrivers(
       return 1;
     } else if (std::dynamic_pointer_cast<const core::MergeJoinNode>(node)) {
       // Merge join must run single-threaded.
+      return 1;
+    } else if (std::dynamic_pointer_cast<const core::LeftMergeJoinNode>(node)) {
+      // LeftMerge join must run single-threaded.
       return 1;
     } else if (
         auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
@@ -657,6 +686,14 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       auto mergeJoinOp = std::make_unique<MergeJoin>(id, ctx.get(), mergeJoin);
       ctx->task->createMergeJoinSource(ctx->splitGroupId, mergeJoin->id());
       operators.push_back(std::move(mergeJoinOp));
+    } else if (
+        auto leftMergeJoin =
+            std::dynamic_pointer_cast<const core::LeftMergeJoinNode>(
+                planNode)) {
+      auto leftMergeJoinOp =
+          std::make_unique<LeftMergeJoin>(id, ctx.get(), leftMergeJoin);
+      ctx->task->createMergeJoinSource(ctx->splitGroupId, leftMergeJoin->id());
+      operators.push_back(std::move(leftMergeJoinOp));
     } else if (
         auto localPartitionNode =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(

@@ -33,7 +33,7 @@ VectorPtr makeSingleNullBase(const TypePtr& type, memory::MemoryPool* pool) {
 LeftMergeJoin::LeftMergeJoin(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const std::shared_ptr<const core::MergeJoinNode>& joinNode)
+    const std::shared_ptr<const core::LeftMergeJoinNode>& joinNode)
     : Operator(
           driverCtx,
           joinNode->outputType(),

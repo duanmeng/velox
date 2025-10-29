@@ -1275,6 +1275,18 @@ class PlanBuilder {
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
+  /// Add a MergeJoinNode to join two inputs using one or more join keys and an
+  /// optional filter. The caller is responsible to ensure that inputs are
+  /// sorted in ascending order on the join keys. If that's not the case, the
+  /// query may produce incorrect results.
+  ///
+  /// See hashJoin method for the description of the parameters.
+  PlanBuilder& leftMergeJoin(
+      const std::vector<std::string>& leftKeys,
+      const std::vector<std::string>& rightKeys,
+      const core::PlanNodePtr& build,
+      const std::vector<std::string>& outputLayout);
+
   /// Add a NestedLoopJoinNode to join two inputs using filter as join
   /// condition to perform equal/non-equal join. Only supports inner/outer
   /// joins.

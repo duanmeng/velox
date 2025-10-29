@@ -1707,6 +1707,32 @@ PlanBuilder& PlanBuilder::mergeJoin(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::leftMergeJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& build,
+    const std::vector<std::string>& outputLayout) {
+  VELOX_CHECK_NOT_NULL(planNode_, "MergeJoin cannot be the source node");
+  VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
+
+  const auto leftType = planNode_->outputType();
+  const auto rightType = build->outputType();
+  const auto resultType = concat(leftType, rightType);
+
+  auto outputType = extract(resultType, outputLayout);
+  auto leftKeyFields = fields(leftType, leftKeys);
+  auto rightKeyFields = fields(rightType, rightKeys);
+
+  planNode_ = std::make_shared<core::LeftMergeJoinNode>(
+      nextPlanNodeId(),
+      leftKeyFields,
+      rightKeyFields,
+      std::move(planNode_),
+      build,
+      std::move(outputType));
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::nestedLoopJoin(
     const core::PlanNodePtr& right,
     const std::vector<std::string>& outputLayout,

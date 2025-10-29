@@ -41,7 +41,7 @@ class LeftMergeJoin : public Operator {
   LeftMergeJoin(
       int32_t operatorId,
       DriverCtx* driverCtx,
-      const std::shared_ptr<const core::MergeJoinNode>& joinNode);
+      const std::shared_ptr<const core::LeftMergeJoinNode>& joinNode);
 
   void initialize() override;
   BlockingReason isBlocked(ContinueFuture* future) override;
@@ -106,7 +106,7 @@ class LeftMergeJoin : public Operator {
   const core::PlanNodeId rightNodeId_;
 
   // Cached node for initialization (consumed in initialize()).
-  std::shared_ptr<const core::MergeJoinNode> joinNode_;
+  std::shared_ptr<const core::LeftMergeJoinNode> joinNode_;
 
   // Key channels and projections.
   std::vector<column_index_t> leftKeyChannels_;

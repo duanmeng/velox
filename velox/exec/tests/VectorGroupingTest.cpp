@@ -15,12 +15,21 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include "folly/experimental/EventCount.h"
+#include "utils/TempDirectoryPath.h"
+
+using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
+
 namespace facebook::velox::exec::test {
 
-class VectorGroupingTest : public OperatorTestBase {
+class VectorGroupingTest : public HiveConnectorTestBase {
  public:
   void testVectorGrouping(
       const std::vector<std::string>& groupKeys,
@@ -123,6 +132,61 @@ TEST_F(VectorGroupingTest, Sample4) {
 
   testVectorGrouping({"c0"}, input, excepted, 2);
   testVectorGrouping({"c0"}, input, excepted, 3);
+}
+
+TEST_F(VectorGroupingTest, grouping) {
+  auto a = ARRAY(BIGINT());
+  const auto leftType =
+      ROW({"c0", "c1", "c2"}, {BIGINT(), DOUBLE(), VARCHAR()});
+  constexpr auto numVectors = 2;
+  constexpr auto rowsPerVector = 7;
+  const auto vectors = makeVectors(leftType, numVectors, rowsPerVector);
+  constexpr int numSplits{5};
+  std::vector<std::shared_ptr<TempFilePath>> splitFiles;
+  for (int i = 0; i < numSplits; ++i) {
+    auto filePath = TempFilePath::create();
+    writeToFile(filePath->getPath(), vectors);
+    splitFiles.push_back(std::move(filePath));
+  }
+  auto splits = makeHiveConnectorSplits(splitFiles);
+
+  const auto planNodeIdGenerator =
+      std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanNodId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(leftType)
+                  .capturePlanNodeId(scanNodId)
+                  .orderBy({"c0"}, false)
+                  .vectorGrouping({"c0"}, 2)
+                  .planNode();
+  std::vector<RowVectorPtr> duckInputs;
+  for (auto i = 0; i < numSplits; ++i) {
+    for (const auto& vector : vectors) {
+      duckInputs.push_back(vector);
+    }
+  }
+  createDuckDbTable(duckInputs);
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .splits(makeHiveConnectorSplits(splitFiles))
+      .assertResults("select * from tmp order by c0");
+
+  CursorParameters cursorParams;
+  cursorParams.planNode = std::move(plan);
+  cursorParams.copyResult = false;
+  const auto cursor = TaskCursor::create(cursorParams);
+  auto& task = cursor->task();
+  for (auto& split : splits) {
+    task->addSplit(scanNodId, Split(std::move(split)));
+  }
+  task->noMoreSplits(scanNodId);
+
+  int64_t numOutputVectors = 0;
+  while (cursor->moveNext()) {
+    const auto& batch = cursor->current();
+    ++numOutputVectors;
+    ASSERT_EQ(batch->size(), numVectors * numSplits);
+  }
+  ASSERT_EQ(numOutputVectors, rowsPerVector);
 }
 
 } // namespace facebook::velox::exec::test
