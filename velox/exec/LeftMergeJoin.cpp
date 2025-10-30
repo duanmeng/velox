@@ -23,8 +23,18 @@ namespace {
 // Build a single-element null base vector for a given type (used for R > L or
 // right exhausted).
 VectorPtr makeSingleNullBase(const TypePtr& type, memory::MemoryPool* pool) {
-  auto base = BaseVector::create(type, 1, pool);
+  const auto base = BaseVector::create(type, 1, pool);
   base->setNull(0, true);
+  return base;
+}
+
+VectorPtr makeSingleValueBase(
+    const VectorPtr& child,
+    vector_size_t sourceIndex,
+    memory::MemoryPool* pool) {
+  const auto type = child->type();
+  const auto base = BaseVector::create(type, 1, pool);
+  base->copy(child.get(), 0, sourceIndex, 1);
   return base;
 }
 
@@ -150,29 +160,29 @@ bool LeftMergeJoin::prepareOutputConstantRight(
   }
   currentLeft_ = left;
 
-  // Right columns:
-  for (const auto& projects : rightProjections_) {
-    const auto outType = outputType_->childAt(projects.outputChannel);
-    if (matched) {
-      VELOX_CHECK_NOT_NULL(right);
-      VELOX_CHECK_LT(rightRowIndex, right->size());
-      const auto child = right->childAt(projects.inputChannel);
-      columns[projects.outputChannel] =
-          BaseVector::wrapInConstant(numLeftSizeRows, rightRowIndex, child);
-    } else {
-      const auto nullBase = makeSingleNullBase(outType, operatorCtx_->pool());
-      columns[projects.outputChannel] =
+  // Right columns (copy-based: materialize single-element base, then wrap
+  // constant).
+  if (matched) {
+    VELOX_CHECK_NOT_NULL(right);
+    VELOX_CHECK_LT(rightRowIndex, right->size());
+    for (const auto& proj : rightProjections_) {
+      const auto child = right->childAt(proj.inputChannel);
+      const auto single = makeSingleValueBase(child, rightRowIndex, pool());
+      columns[proj.outputChannel] =
+          BaseVector::wrapInConstant(numLeftSizeRows, 0, single);
+    }
+  } else {
+    for (const auto& proj : rightProjections_) {
+      const auto outType = outputType_->childAt(proj.outputChannel);
+      const auto nullBase = makeSingleNullBase(outType, pool());
+      columns[proj.outputChannel] =
           BaseVector::wrapInConstant(numLeftSizeRows, 0, nullBase);
     }
   }
-  currentRight_ = right;
 
+  currentRight_ = right;
   output_ = std::make_shared<RowVector>(
-      operatorCtx_->pool(),
-      outputType_,
-      nullptr,
-      numLeftSizeRows,
-      std::move(columns));
+      pool(), outputType_, nullptr, numLeftSizeRows, std::move(columns));
 
   // No index filling needed when reusing left columns directly.
   outputSize_ = numLeftSizeRows;
