@@ -162,20 +162,19 @@ bool LeftMergeJoin::prepareOutputConstantRight(
 
   // Right columns (copy-based: materialize single-element base, then wrap
   // constant).
-  if (matched) {
+  if (FOLLY_LIKELY(matched)) {
     VELOX_CHECK_NOT_NULL(right);
     VELOX_CHECK_LT(rightRowIndex, right->size());
-    for (const auto& proj : rightProjections_) {
-      const auto child = right->childAt(proj.inputChannel);
-      const auto single = makeSingleValueBase(child, rightRowIndex, pool());
-      columns[proj.outputChannel] =
-          BaseVector::wrapInConstant(numLeftSizeRows, 0, single);
+    for (const auto& projects : rightProjections_) {
+      const auto& child = right->childAt(projects.inputChannel);
+      columns[projects.outputChannel] =
+          BaseVector::wrapInConstant(numLeftSizeRows, rightRowIndex, child);
     }
   } else {
-    for (const auto& proj : rightProjections_) {
-      const auto outType = outputType_->childAt(proj.outputChannel);
+    for (const auto& projects : rightProjections_) {
+      const auto outType = outputType_->childAt(projects.outputChannel);
       const auto nullBase = makeSingleNullBase(outType, pool());
-      columns[proj.outputChannel] =
+      columns[projects.outputChannel] =
           BaseVector::wrapInConstant(numLeftSizeRows, 0, nullBase);
     }
   }

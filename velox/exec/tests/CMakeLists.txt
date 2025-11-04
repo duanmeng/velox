@@ -262,6 +262,38 @@ target_link_libraries(
   velox_memory
 )
 
+add_executable(velox_expr_eval_demo VeloxExpressionEvalDemo.cpp)
+
+target_link_libraries(
+  velox_expr_eval_demo
+  velox_aggregates
+  velox_type
+  velox_vector
+  velox_vector_test_lib
+  velox_exec
+  velox_exec_test_lib
+  velox_tpch_connector
+  velox_memory
+  gflags::gflags
+  glog::glog
+)
+
+add_executable(velox_vector_indices_demo VeloxVectorIndicesDemo.cpp)
+
+target_link_libraries(
+  velox_vector_indices_demo
+  velox_aggregates
+  velox_type
+  velox_vector
+  velox_vector_test_lib
+  velox_exec
+  velox_exec_test_lib
+  velox_tpch_connector
+  velox_memory
+  gflags::gflags
+  glog::glog
+)
+
 add_executable(
   velox_table_evolution_fuzzer_test
   TableEvolutionFuzzerTest.cpp
