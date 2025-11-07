@@ -66,8 +66,20 @@ target_link_libraries(
 )
 
 add_executable(velox_example_vector_reader_writer VectorReaderWriter.cpp)
-
 target_link_libraries(velox_example_vector_reader_writer velox_expression velox_type velox_vector)
+
+add_executable(velox_vector_writer_demo VectorWriterDemo.cpp)
+target_link_libraries(velox_vector_writer_demo velox_expression velox_type velox_vector glog::glog)
+
+add_executable(velox_batch_builder_demo BatchBuilderDemo.cpp)
+target_link_libraries(
+  velox_batch_builder_demo
+  velox_expression
+  velox_type
+  velox_vector
+  glog::glog
+  Folly::folly
+)
 
 add_executable(velox_example_operator_extensibility OperatorExtensibility.cpp)
 target_link_libraries(
