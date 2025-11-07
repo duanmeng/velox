@@ -268,13 +268,11 @@ class AnyColumnWriter {
   }
 
  private:
-  void addRowImpl(const char* item) {
+  void addRowImpl(std::string& item) {
     addRowDispatch(StringView(item));
   }
-  void addRowImpl(const std::string& item) {
-    addRowDispatch(StringView(item));
-  }
-  void addRowImpl(const std::vector<std::string>& items) {
+
+  void addRowImpl(std::vector<std::string>& items) {
     std::vector<StringView> views;
     views.reserve(items.size());
     for (const auto& s : items) {
@@ -282,6 +280,21 @@ class AnyColumnWriter {
     }
     addRowDispatch(views);
   }
+
+  void addRowImpl(std::vector<std::vector<std::string>>& items) {
+    std::vector<std::vector<StringView>> views;
+    views.reserve(items.size());
+    for (const auto& item : items) {
+      std::vector<StringView> cur;
+      cur.reserve(item.size());
+      for (const auto& s : item) {
+        cur.emplace_back(s);
+      }
+      views.push_back(std::move(cur));
+    }
+    addRowDispatch(views);
+  }
+
   template <typename T>
   void addRowImpl(T&& item) {
     addRowDispatch(std::forward<T>(item));
@@ -289,6 +302,7 @@ class AnyColumnWriter {
 
   template <typename Arg>
   void addRowDispatch(Arg&& arg) {
+    bool matched = false;
     std::visit(
         [&](auto& writer) {
           // C++20: (requires { writer->addRow(std::forward<Arg>(arg)); })
@@ -297,9 +311,15 @@ class AnyColumnWriter {
                             decltype(writer),
                             Arg>) {
             writer->addRow(std::forward<Arg>(arg));
+            matched = true;
           }
         },
         writer_);
+    if (!matched) {
+      VELOX_FAIL(
+          "No matching writer found for the provided argument type: {}",
+          std::string(typeid(Arg).name()));
+    }
   }
   WriterVariant writer_;
 };
@@ -328,12 +348,13 @@ DataTypeInfo parseDataType(folly::StringPiece dataTypeStr) {
     return {TypeKind::BIGINT, dim};
   }
 
-  if (dataTypeStr.startsWith("String") || dataTypeStr.startsWith("string")) {
-    return {TypeKind::VARCHAR, dim};
+  if (dataTypeStr.startsWith("int")) {
+    return {TypeKind::INTEGER, dim};
   }
 
-  if (dataTypeStr.startsWith("Int64") || dataTypeStr.startsWith("long")) {
-    return {TypeKind::BIGINT, dim};
+  if (dataTypeStr.startsWith("String") || dataTypeStr.startsWith("string") ||
+      dataTypeStr.startsWith("Bytes")) {
+    return {TypeKind::VARCHAR, dim};
   }
 
   if (dataTypeStr.startsWith("Double") || dataTypeStr.startsWith("double")) {
@@ -344,9 +365,6 @@ DataTypeInfo parseDataType(folly::StringPiece dataTypeStr) {
     return {TypeKind::REAL, dim};
   }
 
-  if (dataTypeStr.startsWith("String") || dataTypeStr.startsWith("string")) {
-    return {TypeKind::VARCHAR, dim};
-  }
   VELOX_UNSUPPORTED("Unsupported data type: {}", dataTypeStr.toString());
 }
 
@@ -388,23 +406,79 @@ int main() {
   const int numRows = 2;
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   auto pool = memory::memoryManager()->addLeafPool();
-  VectorPtr result;
   {
-    auto info = parseDataType("string");
-    auto writer = createWriter(info);
+    VectorPtr result;
+    {
+      auto info = parseDataType("string");
+      auto writer = createWriter(info);
 
-    BaseVector::ensureWritable(
-        SelectivityVector{numRows},
-        createChildVeloxType(info),
-        pool.get(),
-        result);
-    writer.init(result);
-    auto item = "fd";
-    writer.addRow(item);
-    writer.addNullRow();
-    writer.finish();
+      BaseVector::ensureWritable(
+          SelectivityVector{numRows},
+          createChildVeloxType(info),
+          pool.get(),
+          result);
+      writer.init(result);
+      std::string item("fd");
+      for (int i = 0; i < numRows; ++i) {
+        item += std::to_string(i);
+      }
+      writer.addRow(item);
+      writer.addRow("fdfda");
+      writer.finish();
+    }
+    LOG(ERROR) << result->toString(0, result->size());
   }
-  LOG(ERROR) << result->toString(0, result->size());
+
+  {
+    VectorPtr result;
+    {
+      auto info = parseDataType("StringList");
+      auto writer = createWriter(info);
+
+      BaseVector::ensureWritable(
+          SelectivityVector{numRows},
+          createChildVeloxType(info),
+          pool.get(),
+          result);
+      writer.init(result);
+      std::vector<std::string> items;
+      for (int i = 0; i < numRows; ++i) {
+        items.emplace_back("item" + std::to_string(i));
+      }
+      writer.addRow(items);
+      writer.addNullRow();
+      writer.finish();
+    }
+    LOG(ERROR) << result->toString(0, result->size());
+  }
+
+  {
+    VectorPtr result;
+    {
+      auto info = parseDataType("StringLists");
+      auto writer = createWriter(info);
+
+      BaseVector::ensureWritable(
+          SelectivityVector{numRows},
+          createChildVeloxType(info),
+          pool.get(),
+          result);
+      writer.init(result);
+      std::vector<std::vector<std::string>> items;
+      for (int i = 0; i < numRows; ++i) {
+        std::vector<std::string> cur;
+        for (int j = 0; j < numRows; ++j) {
+          cur.emplace_back("item" + std::to_string(i + j));
+        }
+        items.push_back(std::move(cur));
+      }
+      writer.addRow(items);
+      writer.addNullRow();
+      writer.finish();
+    }
+    LOG(ERROR) << result->toString(0, result->size());
+  }
+
   {
     auto info = parseDataType("Int64List");
     auto writer = createWriter(info);
