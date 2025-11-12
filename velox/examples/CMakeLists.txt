@@ -145,3 +145,30 @@ target_link_libraries(
   glog::glog
   gflags::gflags
 )
+
+add_executable(generic_source GenericSource.cpp)
+
+target_link_libraries(
+  generic_source
+  velox_aggregates
+  velox_type
+  velox_vector
+  velox_exec
+  velox_hive_connector
+  velox_cursor
+  velox_core
+  velox_memory
+  velox_dwio_common
+  velox_dwio_common_exception
+  velox_dwio_parquet_reader
+  velox_dwio_common_test_utils
+  velox_dwio_native_parquet_reader
+  velox_exec_test_lib
+  velox_hdfs
+  velox_gcs
+  velox_abfs
+  velox_s3fs
+  Folly::folly
+  glog::glog
+  gflags::gflags
+)
