@@ -116,6 +116,7 @@ void HybridSortBuffer::addInput(const VectorPtr& input) {
       decoded, folly::Range(rows.data(), input->size()), numSortKeys + 1);
 
   numInputRows_ += allRows.size();
+  numInputBytes_ += input->retainedSize();
 }
 
 void HybridSortBuffer::sortInput(uint64_t numRows) {
@@ -131,7 +132,6 @@ void HybridSortBuffer::noMoreInput() {
       "facebook::velox::exec::HybridSortBuffer::noMoreInput", this);
   VELOX_CHECK(!noMoreInput_);
   VELOX_CHECK_NULL(outputSpiller_);
-
   // It may trigger spill, make sure it's triggered before noMoreInput_ is set.
   ensureSortFits();
 
@@ -141,10 +141,10 @@ void HybridSortBuffer::noMoreInput() {
   if (numInputRows_ == 0) {
     return;
   }
+  estimatedOutputRowSize_ = numInputBytes_ / numInputRows_;
 
   if (inputSpiller_ == nullptr) {
     VELOX_CHECK_EQ(numInputRows_, data_->numRows());
-    updateEstimatedOutputRowSize();
     sortInput(numInputRows_);
   } else {
     // Spill the remaining in-memory state to disk if spilling has been
@@ -206,7 +206,6 @@ void HybridSortBuffer::spill() {
   if (data_->numRows() == 0) {
     return;
   }
-  updateEstimatedOutputRowSize();
 
   if (sortedRows_.empty()) {
     spillInput();
@@ -355,29 +354,6 @@ void HybridSortBuffer::ensureSortFits() {
       succinctBytes(pool_->reservedBytes()));
 }
 
-void HybridSortBuffer::updateEstimatedOutputRowSize() {
-  if (inputs_.empty() || inputs_[0]->size() == 0) {
-    return;
-  }
-
-  for (const auto& input : inputs_) {
-  }
-  uint64_t totalBytes = 0;
-  uint64_t totalRows = 0;
-  for (const auto& input : inputs_) {
-    totalBytes += input->estimateFlatSize();
-    totalRows += input->size();
-  }
-  const auto optionalRowSize = totalBytes / totalRows;
-
-  const auto rowSize = optionalRowSize;
-  if (!estimatedOutputRowSize_.has_value()) {
-    estimatedOutputRowSize_ = rowSize;
-  } else if (rowSize > estimatedOutputRowSize_.value()) {
-    estimatedOutputRowSize_ = rowSize;
-  }
-}
-
 void HybridSortBuffer::runSpill(
     NoRowContainerSpiller* spiller,
     int64_t numInputs,
@@ -475,8 +451,8 @@ void HybridSortBuffer::prepareOutput(vector_size_t batchSize) {
 }
 
 void HybridSortBuffer::gatherCopyOutput(
-    RowVectorPtr& output,
-    RowVectorPtr& indexOutput,
+    const RowVectorPtr& output,
+    const RowVectorPtr& indexOutput,
     const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
     uint64_t offset) const {
   for (const auto& columnProjection : indexColumnMap_) {
@@ -492,6 +468,7 @@ void HybridSortBuffer::gatherCopyOutput(
   std::vector<vector_size_t> sourceIndices;
   sourceIndices.reserve(indexOutput->size());
 
+  // Extracts vector indices.
   const SelectivityVector rows{indexOutput->size()};
   DecodedVector decoded;
   decoded.decode(*indexOutput->childAt(0), rows);
@@ -501,8 +478,9 @@ void HybridSortBuffer::gatherCopyOutput(
     sources.push_back(inputs_[index].get());
   });
 
+  // Extracts row indices.
   decoded.decode(*indexOutput->childAt(1), rows);
-  VectorReader<int64_t> rowIndexReader(&decoded);
+  const VectorReader<int64_t> rowIndexReader(&decoded);
   rows.applyToSelected([&](vector_size_t row) {
     const auto index = rowIndexReader.readNullFree(row);
     sourceIndices.push_back(index);

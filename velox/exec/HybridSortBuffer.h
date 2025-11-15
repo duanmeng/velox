@@ -33,7 +33,7 @@ namespace facebook::velox::exec {
 /// columns are the vector indices and the row indices of each vector. After
 /// sorting, rows are gathered and copied from the input vectors using these
 /// indices.
-class HybridSortBuffer : public ISortBuffer {
+class HybridSortBuffer final : public ISortBuffer {
  public:
   HybridSortBuffer(
       const RowTypePtr& input,
@@ -45,32 +45,32 @@ class HybridSortBuffer : public ISortBuffer {
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
-  ~HybridSortBuffer();
+  ~HybridSortBuffer() override;
 
-  void addInput(const VectorPtr& input);
+  void addInput(const VectorPtr& input) override;
 
   /// Indicates no more input and triggers either of:
   ///  - In-memory sorting on rows stored in 'data_' if spilling is not enabled.
   ///  - Finish spilling and setup the sort merge reader for the un-spilling
   ///  processing for the output.
-  void noMoreInput();
+  void noMoreInput() override;
 
   /// Returns the sorted output rows in batch.
-  RowVectorPtr getOutput(vector_size_t maxOutputRows);
+  RowVectorPtr getOutput(vector_size_t maxOutputRows) override;
 
   /// Indicates if this sort buffer can spill or not.
-  bool canSpill() const {
+  bool canSpill() const override {
     return spillConfig_ != nullptr;
   }
 
   /// Invoked to spill all the rows from 'data_'.
-  void spill();
+  void spill() override;
 
   memory::MemoryPool* pool() const {
     return pool_;
   }
 
-  std::optional<uint64_t> estimateOutputRowSize() const;
+  std::optional<uint64_t> estimateOutputRowSize() const override;
 
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
@@ -84,8 +84,6 @@ class HybridSortBuffer : public ISortBuffer {
   // to make output fit.
   void ensureSortFits();
 
-  void updateEstimatedOutputRowSize();
-
   void prepareOutputVector(
       RowVectorPtr& output,
       const RowTypePtr& outputType,
@@ -95,8 +93,8 @@ class HybridSortBuffer : public ISortBuffer {
   void prepareOutput(vector_size_t outputBatchSize);
 
   void gatherCopyOutput(
-      RowVectorPtr& output,
-      RowVectorPtr& indexOutput,
+      const RowVectorPtr& output,
+      const RowVectorPtr& indexOutput,
       const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
       uint64_t offset) const;
 
@@ -165,7 +163,8 @@ class HybridSortBuffer : public ISortBuffer {
   // The column projection map between 'input_' and sort columns in 'data_'.
   std::vector<IdentityProjection> columnMap_;
 
-  // The column projection map between 'data_' and 'indexOutput_'.
+  // The column projection map between 'data_' and 'indexOutput_', containing
+  // two columns: 0 for vector indices and 1 for row indices.
   std::vector<IdentityProjection> indexColumnMap_;
 
   // Indicates no more input. Once it is set, addInput() can't be called on this
@@ -174,6 +173,9 @@ class HybridSortBuffer : public ISortBuffer {
 
   // The number of received input rows.
   uint64_t numInputRows_ = 0;
+
+  // The number of received input bytes.
+  uint64_t numInputBytes_ = 0;
 
   // Used to store the input data in row format.
   std::unique_ptr<RowContainer> data_;
