@@ -89,7 +89,7 @@ class HybridSortBuffer : public ISortBuffer {
   void prepareOutputVector(
       RowVectorPtr& output,
       const RowTypePtr& outputType,
-      vector_size_t outputBatchSize);
+      vector_size_t outputBatchSize) const;
 
   // Invoked to initialize or reset the reusable output buffer to get output.
   void prepareOutput(vector_size_t outputBatchSize);
@@ -98,7 +98,7 @@ class HybridSortBuffer : public ISortBuffer {
       RowVectorPtr& output,
       RowVectorPtr& indexOutput,
       const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
-      uint64_t offset);
+      uint64_t offset) const;
 
   // Sort the pointers to the rows in RowContainer (data_) instead of sorting
   // the rows.
@@ -121,15 +121,15 @@ class HybridSortBuffer : public ISortBuffer {
   void spillOutput();
 
   // Spill remaining sorted input vectors.
-  void
-  runSpill(NoRowContainerSpiller* spiller, int64_t numInputs, uint64_t offset);
+  void runSpill(
+      NoRowContainerSpiller* spiller,
+      int64_t numInputs,
+      uint64_t offset) const;
 
   void finishInputSpill();
 
-  // Finish output spill, if it has happended. And we shouldn't get any rows
-  // from non-spilled partition as there is only one hash partition for
-  // HybridSortBuffer.
-  void maybeFinishOutputSpill();
+  // Finish output spill, there is only one spill partition;
+  void finishOutputSpill();
 
   // Returns true if the sort buffer has spilled, regardless of during input or
   // output processing. If spilled() is true, it means the sort buffer is in

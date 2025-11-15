@@ -74,7 +74,8 @@ void HybridSortBuffer::addInput(const VectorPtr& input) {
   VELOX_CHECK(!noMoreInput_);
   ensureInputFits(input);
 
-  SelectivityVector allRows(input->size());
+  VELOX_CHECK_EQ(input->encoding(), VectorEncoding::Simple::ROW);
+  const SelectivityVector allRows(input->size());
   std::vector<char*> rows(input->size());
   for (int row = 0; row < input->size(); ++row) {
     rows[row] = data_->newRow();
@@ -151,8 +152,6 @@ void HybridSortBuffer::noMoreInput() {
     // when producing output as we don't support to spill during that stage as
     // for now.
     spill();
-
-    maybeFinishOutputSpill();
   }
 
   // Releases the unused memory reservation after procesing input.
@@ -382,7 +381,7 @@ void HybridSortBuffer::updateEstimatedOutputRowSize() {
 void HybridSortBuffer::runSpill(
     NoRowContainerSpiller* spiller,
     int64_t numInputs,
-    uint64_t offset) {
+    uint64_t offset) const {
   RowVectorPtr output;
   RowVectorPtr indexOutput;
   int64_t numOutputs{0};
@@ -440,13 +439,13 @@ void HybridSortBuffer::spillOutput() {
   sortedRows_.shrink_to_fit();
   // Finish right after spilling as the output spiller only spills at most
   // once.
-  maybeFinishOutputSpill();
+  finishOutputSpill();
 }
 
 void HybridSortBuffer::prepareOutputVector(
     RowVectorPtr& output,
     const RowTypePtr& outputType,
-    vector_size_t outputBatchSize) {
+    vector_size_t outputBatchSize) const {
   if (output != nullptr) {
     VectorPtr vector = std::move(output);
     BaseVector::prepareForReuse(vector, outputBatchSize);
@@ -479,7 +478,7 @@ void HybridSortBuffer::gatherCopyOutput(
     RowVectorPtr& output,
     RowVectorPtr& indexOutput,
     const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
-    uint64_t offset) {
+    uint64_t offset) const {
   for (const auto& columnProjection : indexColumnMap_) {
     data_->extractColumn(
         sortedRows.data() + offset,
@@ -580,20 +579,14 @@ void HybridSortBuffer::finishInputSpill() {
   inputSpillFileGroups_.push_back(spillPartitionSet.begin()->second->files());
 }
 
-void HybridSortBuffer::maybeFinishOutputSpill() {
+void HybridSortBuffer::finishOutputSpill() {
   VELOX_CHECK_NULL(spillMerger_);
   VELOX_CHECK(outputSpillPartitionSet_.empty());
-  VELOX_CHECK_EQ(
-      !!(outputSpiller_ != nullptr) + !!(inputSpiller_ != nullptr),
-      1,
-      "inputSpiller_ {}, outputSpiller_ {}",
-      inputSpiller_ == nullptr ? "set" : "null",
-      outputSpiller_ == nullptr ? "set" : "null");
-  if (outputSpiller_ != nullptr) {
-    VELOX_CHECK(!outputSpiller_->finalized());
-    outputSpiller_->finishSpill(outputSpillPartitionSet_);
-    VELOX_CHECK_EQ(outputSpillPartitionSet_.size(), 1);
-  }
+  VELOX_CHECK_NULL(inputSpiller_);
+  VELOX_CHECK_NOT_NULL(outputSpiller_);
+  VELOX_CHECK(!outputSpiller_->finalized());
+  outputSpiller_->finishSpill(outputSpillPartitionSet_);
+  VELOX_CHECK_EQ(outputSpillPartitionSet_.size(), 1);
 }
 
 void HybridSortBuffer::prepareOutputWithSpill() {
