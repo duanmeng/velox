@@ -59,18 +59,19 @@ add_executable(
   HashJoinTest.cpp
   HashPartitionFunctionTest.cpp
   HashTableTest.cpp
-  HybridSortBufferTest.cpp
   IndexLookupJoinTest.cpp
   LimitTest.cpp
   LocalPartitionTest.cpp
   Main.cpp
   MarkDistinctTest.cpp
+  MaterializedSortBufferTest.cpp
   MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
   MergerTest.cpp
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
+  NonMaterializedSortBufferTest.cpp
   OrderByTest.cpp
   OperatorTraceTest.cpp
   OutputBufferManagerTest.cpp
@@ -89,7 +90,6 @@ add_executable(
   RowNumberTest.cpp
   ScaledScanControllerTest.cpp
   ScaleWriterLocalPartitionTest.cpp
-  SortBufferTest.cpp
   SpatialIndexTest.cpp
   SpillerTest.cpp
   SpillTest.cpp

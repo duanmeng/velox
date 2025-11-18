@@ -62,7 +62,7 @@ OrderBy::OrderBy(
 
   const auto hybridSortEanbled = driverCtx->queryConfig().hybridSortEnabled();
   if (hybridSortEanbled) {
-    sortBuffer_ = std::make_unique<HybridSortBuffer>(
+    sortBuffer_ = std::make_unique<NonMaterializedSortBuffer>(
         outputType_,
         sortColumnIndices,
         sortCompareFlags,
@@ -72,7 +72,7 @@ OrderBy::OrderBy(
         spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
         spillStats_.get());
   } else {
-    sortBuffer_ = std::make_unique<SortBuffer>(
+    sortBuffer_ = std::make_unique<MaterializedSortBuffer>(
         outputType_,
         sortColumnIndices,
         sortCompareFlags,

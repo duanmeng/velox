@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "SortBuffer.h"
+#include "velox/exec/MaterializedSortBuffer.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Spiller.h"
 
 namespace facebook::velox::exec {
 
-SortBuffer::SortBuffer(
+MaterializedSortBuffer::MaterializedSortBuffer(
     const RowTypePtr& input,
     const std::vector<column_index_t>& sortColumnIndices,
     const std::vector<CompareFlags>& sortCompareFlags,
@@ -79,11 +79,11 @@ SortBuffer::SortBuffer(
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
 
-SortBuffer::~SortBuffer() {
+MaterializedSortBuffer::~MaterializedSortBuffer() {
   pool_->release();
 }
 
-void SortBuffer::addInput(const VectorPtr& input) {
+void MaterializedSortBuffer::addInput(const VectorPtr& input) {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::SortBuffer::addInput", this);
 
@@ -107,7 +107,7 @@ void SortBuffer::addInput(const VectorPtr& input) {
   numInputRows_ += allRows.size();
 }
 
-void SortBuffer::noMoreInput() {
+void MaterializedSortBuffer::noMoreInput() {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::SortBuffer::noMoreInput", this);
   VELOX_CHECK(!noMoreInput_);
@@ -147,7 +147,7 @@ void SortBuffer::noMoreInput() {
   pool_->release();
 }
 
-RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
+RowVectorPtr MaterializedSortBuffer::getOutput(vector_size_t maxOutputRows) {
   SCOPE_EXIT {
     pool_->release();
   };
@@ -171,7 +171,7 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
   return output_;
 }
 
-bool SortBuffer::hasSpilled() const {
+bool MaterializedSortBuffer::hasSpilled() const {
   if (inputSpiller_ != nullptr) {
     VELOX_CHECK_NULL(outputSpiller_);
     return true;
@@ -179,7 +179,7 @@ bool SortBuffer::hasSpilled() const {
   return outputSpiller_ != nullptr;
 }
 
-void SortBuffer::spill() {
+void MaterializedSortBuffer::spill() {
   VELOX_CHECK_NOT_NULL(
       spillConfig_, "spill config is null when SortBuffer spill is called");
 
@@ -196,11 +196,11 @@ void SortBuffer::spill() {
   }
 }
 
-std::optional<uint64_t> SortBuffer::estimateOutputRowSize() const {
+std::optional<uint64_t> MaterializedSortBuffer::estimateOutputRowSize() const {
   return estimatedOutputRowSize_;
 }
 
-void SortBuffer::ensureInputFits(const VectorPtr& input) {
+void MaterializedSortBuffer::ensureInputFits(const VectorPtr& input) {
   // Check if spilling is enabled or not.
   if (spillConfig_ == nullptr) {
     return;
@@ -261,7 +261,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
-void SortBuffer::ensureOutputFits(vector_size_t batchSize) {
+void MaterializedSortBuffer::ensureOutputFits(vector_size_t batchSize) {
   VELOX_CHECK_GT(batchSize, 0);
   // Check if spilling is enabled or not.
   if (spillConfig_ == nullptr) {
@@ -293,7 +293,7 @@ void SortBuffer::ensureOutputFits(vector_size_t batchSize) {
                << ", reservation: " << succinctBytes(pool_->reservedBytes());
 }
 
-void SortBuffer::ensureSortFits() {
+void MaterializedSortBuffer::ensureSortFits() {
   // Check if spilling is enabled or not.
   if (spillConfig_ == nullptr) {
     return;
@@ -329,7 +329,7 @@ void SortBuffer::ensureSortFits() {
       succinctBytes(pool_->reservedBytes()));
 }
 
-void SortBuffer::updateEstimatedOutputRowSize() {
+void MaterializedSortBuffer::updateEstimatedOutputRowSize() {
   const auto optionalRowSize = data_->estimateRowSize();
   if (!optionalRowSize.has_value() || optionalRowSize.value() == 0) {
     return;
@@ -343,7 +343,7 @@ void SortBuffer::updateEstimatedOutputRowSize() {
   }
 }
 
-void SortBuffer::spillInput() {
+void MaterializedSortBuffer::spillInput() {
   if (inputSpiller_ == nullptr) {
     VELOX_CHECK(!noMoreInput_);
     const auto sortingKeys = SpillState::makeSortingKeys(sortCompareFlags_);
@@ -354,7 +354,7 @@ void SortBuffer::spillInput() {
   data_->clear();
 }
 
-void SortBuffer::spillOutput() {
+void MaterializedSortBuffer::spillOutput() {
   if (hasSpilled()) {
     // Already spilled.
     return;
@@ -379,7 +379,7 @@ void SortBuffer::spillOutput() {
   finishSpill();
 }
 
-void SortBuffer::prepareOutput(vector_size_t batchSize) {
+void MaterializedSortBuffer::prepareOutput(vector_size_t batchSize) {
   if (output_ != nullptr) {
     VectorPtr output = std::move(output_);
     BaseVector::prepareForReuse(output, batchSize);
@@ -403,7 +403,7 @@ void SortBuffer::prepareOutput(vector_size_t batchSize) {
   VELOX_CHECK_LE(output_->size() + numOutputRows_, numInputRows_);
 }
 
-void SortBuffer::getOutputWithoutSpill() {
+void MaterializedSortBuffer::getOutputWithoutSpill() {
   VELOX_DCHECK_EQ(numInputRows_, sortedRows_.size());
   for (const auto& columnProjection : columnMap_) {
     data_->extractColumn(
@@ -415,7 +415,7 @@ void SortBuffer::getOutputWithoutSpill() {
   numOutputRows_ += output_->size();
 }
 
-void SortBuffer::getOutputWithSpill() {
+void MaterializedSortBuffer::getOutputWithSpill() {
   VELOX_CHECK_NOT_NULL(spillMerger_);
   VELOX_DCHECK_EQ(sortedRows_.size(), 0);
 
@@ -460,7 +460,7 @@ void SortBuffer::getOutputWithSpill() {
   numOutputRows_ += output_->size();
 }
 
-void SortBuffer::finishSpill() {
+void MaterializedSortBuffer::finishSpill() {
   VELOX_CHECK_NULL(spillMerger_);
   VELOX_CHECK(spillPartitionSet_.empty());
   VELOX_CHECK_EQ(
@@ -479,7 +479,7 @@ void SortBuffer::finishSpill() {
   VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
 }
 
-void SortBuffer::prepareOutputWithSpill() {
+void MaterializedSortBuffer::prepareOutputWithSpill() {
   VELOX_CHECK(hasSpilled());
   if (spillMerger_ != nullptr) {
     VELOX_CHECK(spillPartitionSet_.empty());

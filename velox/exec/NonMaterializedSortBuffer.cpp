@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/HybridSortBuffer.h"
+#include "velox/exec/NonMaterializedSortBuffer.h"
 
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Spiller.h"
@@ -22,7 +22,7 @@
 
 namespace facebook::velox::exec {
 
-HybridSortBuffer::HybridSortBuffer(
+NonMaterializedSortBuffer::NonMaterializedSortBuffer(
     const RowTypePtr& input,
     const std::vector<column_index_t>& sortColumnIndices,
     const std::vector<CompareFlags>& sortCompareFlags,
@@ -64,13 +64,13 @@ HybridSortBuffer::HybridSortBuffer(
       sortedColumnTypes, indexType_->children(), pool_);
 }
 
-HybridSortBuffer::~HybridSortBuffer() {
+NonMaterializedSortBuffer::~NonMaterializedSortBuffer() {
   inputs_.clear();
   rowIndices_.reset();
   pool_->release();
 }
 
-void HybridSortBuffer::addInput(const VectorPtr& input) {
+void NonMaterializedSortBuffer::addInput(const VectorPtr& input) {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::HybridSortBuffer::addInput", this);
   VELOX_CHECK(!noMoreInput_);
@@ -120,7 +120,7 @@ void HybridSortBuffer::addInput(const VectorPtr& input) {
   numInputBytes_ += input->retainedSize();
 }
 
-void HybridSortBuffer::sortInput(uint64_t numRows) {
+void NonMaterializedSortBuffer::sortInput(uint64_t numRows) {
   sortedRows_.resize(numRows);
   RowContainerIterator iter;
   data_->listRows(&iter, numRows, sortedRows_.data());
@@ -128,7 +128,7 @@ void HybridSortBuffer::sortInput(uint64_t numRows) {
       data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
 }
 
-void HybridSortBuffer::noMoreInput() {
+void NonMaterializedSortBuffer::noMoreInput() {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::HybridSortBuffer::noMoreInput", this);
   VELOX_CHECK(!noMoreInput_);
@@ -159,7 +159,7 @@ void HybridSortBuffer::noMoreInput() {
   pool_->release();
 }
 
-RowVectorPtr HybridSortBuffer::getOutput(vector_size_t maxOutputRows) {
+RowVectorPtr NonMaterializedSortBuffer::getOutput(vector_size_t maxOutputRows) {
   SCOPE_EXIT {
     pool_->release();
   };
@@ -190,7 +190,7 @@ RowVectorPtr HybridSortBuffer::getOutput(vector_size_t maxOutputRows) {
   return output_;
 }
 
-bool HybridSortBuffer::hasSpilled() const {
+bool NonMaterializedSortBuffer::hasSpilled() const {
   if (inputSpiller_ != nullptr) {
     VELOX_CHECK_NULL(outputSpiller_);
     return true;
@@ -198,7 +198,7 @@ bool HybridSortBuffer::hasSpilled() const {
   return outputSpiller_ != nullptr;
 }
 
-void HybridSortBuffer::spill() {
+void NonMaterializedSortBuffer::spill() {
   VELOX_CHECK_NOT_NULL(
       spillConfig_,
       "spill config is null when HybridSortBuffer spill is called");
@@ -215,11 +215,12 @@ void HybridSortBuffer::spill() {
   }
 }
 
-std::optional<uint64_t> HybridSortBuffer::estimateOutputRowSize() const {
+std::optional<uint64_t> NonMaterializedSortBuffer::estimateOutputRowSize()
+    const {
   return estimatedOutputRowSize_;
 }
 
-void HybridSortBuffer::ensureInputFits(const VectorPtr& input) {
+void NonMaterializedSortBuffer::ensureInputFits(const VectorPtr& input) {
   // Check if spilling is enabled or not.
   if (spillConfig_ == nullptr) {
     return;
@@ -287,7 +288,7 @@ void HybridSortBuffer::ensureInputFits(const VectorPtr& input) {
                << ", reservation: " << succinctBytes(pool()->reservedBytes());
 }
 
-void HybridSortBuffer::ensureOutputFits(vector_size_t batchSize) {
+void NonMaterializedSortBuffer::ensureOutputFits(vector_size_t batchSize) {
   VELOX_CHECK_GT(batchSize, 0);
   // Check if spilling is enabled or not.
   if (spillConfig_ == nullptr) {
@@ -319,7 +320,7 @@ void HybridSortBuffer::ensureOutputFits(vector_size_t batchSize) {
                << ", reservation: " << succinctBytes(pool_->reservedBytes());
 }
 
-void HybridSortBuffer::ensureSortFits() {
+void NonMaterializedSortBuffer::ensureSortFits() {
   // Check if spilling is enabled or not.
   if (spillConfig_ == nullptr) {
     return;
@@ -355,7 +356,7 @@ void HybridSortBuffer::ensureSortFits() {
       succinctBytes(pool_->reservedBytes()));
 }
 
-void HybridSortBuffer::runSpill(
+void NonMaterializedSortBuffer::runSpill(
     NoRowContainerSpiller* spiller,
     int64_t numSpillRows,
     uint64_t spillRowOffset) {
@@ -377,7 +378,7 @@ void HybridSortBuffer::runSpill(
   VELOX_CHECK_EQ(numOutputs, numSpillRows);
 }
 
-void HybridSortBuffer::spillInput() {
+void NonMaterializedSortBuffer::spillInput() {
   VELOX_CHECK_LT(!!(inputSpiller_ == nullptr) + !!noMoreInput_, 2);
   inputSpiller_ = std::make_unique<MergeSpiller>(
       inputType_,
@@ -396,7 +397,7 @@ void HybridSortBuffer::spillInput() {
   sortedRows_.shrink_to_fit();
 }
 
-void HybridSortBuffer::spillOutput() {
+void NonMaterializedSortBuffer::spillOutput() {
   if (hasSpilled()) {
     // Already spilled.
     return;
@@ -419,7 +420,7 @@ void HybridSortBuffer::spillOutput() {
   finishOutputSpill();
 }
 
-void HybridSortBuffer::prepareOutputVector(
+void NonMaterializedSortBuffer::prepareOutputVector(
     RowVectorPtr& output,
     const RowTypePtr& outputType,
     vector_size_t outputBatchSize) const {
@@ -437,7 +438,7 @@ void HybridSortBuffer::prepareOutputVector(
   }
 }
 
-void HybridSortBuffer::prepareOutput(vector_size_t batchSize) {
+void NonMaterializedSortBuffer::prepareOutput(vector_size_t batchSize) {
   prepareOutputVector(output_, inputType_, batchSize);
   prepareOutputVector(indexOutput_, indexType_, batchSize);
 
@@ -451,7 +452,7 @@ void HybridSortBuffer::prepareOutput(vector_size_t batchSize) {
   VELOX_CHECK_LE(output_->size() + numOutputRows_, numInputRows_);
 }
 
-void HybridSortBuffer::gatherCopyOutput(
+void NonMaterializedSortBuffer::gatherCopyOutput(
     const RowVectorPtr& indexOutput,
     uint64_t sortedRowOffset,
     RowVector* output) const {
@@ -484,13 +485,13 @@ void HybridSortBuffer::gatherCopyOutput(
   gatherCopy(output, 0, output->size(), sourceVectors, sourceRowIndices);
 }
 
-void HybridSortBuffer::getOutputWithoutSpill() {
+void NonMaterializedSortBuffer::getOutputWithoutSpill() {
   VELOX_DCHECK_EQ(numInputRows_, sortedRows_.size());
   gatherCopyOutput(indexOutput_, numOutputRows_, output_.get());
   numOutputRows_ += output_->size();
 }
 
-void HybridSortBuffer::getOutputWithSpill() {
+void NonMaterializedSortBuffer::getOutputWithSpill() {
   if (spillMerger_ != nullptr) {
     VELOX_DCHECK_EQ(sortedRows_.size(), 0);
 
@@ -541,7 +542,7 @@ void HybridSortBuffer::getOutputWithSpill() {
   numOutputRows_ += output_->size();
 }
 
-void HybridSortBuffer::finishInputSpill() {
+void NonMaterializedSortBuffer::finishInputSpill() {
   VELOX_CHECK_NULL(spillMerger_);
   SpillPartitionSet spillPartitionSet;
   VELOX_CHECK_NOT_NULL(inputSpiller_);
@@ -552,7 +553,7 @@ void HybridSortBuffer::finishInputSpill() {
   inputSpillFileGroups_.push_back(spillPartitionSet.begin()->second->files());
 }
 
-void HybridSortBuffer::finishOutputSpill() {
+void NonMaterializedSortBuffer::finishOutputSpill() {
   VELOX_CHECK_NULL(spillMerger_);
   VELOX_CHECK(outputSpillPartitionSet_.empty());
   VELOX_CHECK_NULL(inputSpiller_);
@@ -562,7 +563,7 @@ void HybridSortBuffer::finishOutputSpill() {
   VELOX_CHECK_EQ(outputSpillPartitionSet_.size(), 1);
 }
 
-void HybridSortBuffer::prepareOutputWithSpill() {
+void NonMaterializedSortBuffer::prepareOutputWithSpill() {
   VELOX_CHECK(hasSpilled());
   if (inputSpiller_ != nullptr) {
     if (spillMerger_ != nullptr) {

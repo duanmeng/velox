@@ -27,9 +27,9 @@ namespace facebook::velox::exec {
 class SortInputSpiller;
 class SortOutputSpiller;
 
-class ISortBuffer {
+class SortBufferBase {
  public:
-  virtual ~ISortBuffer() = default;
+  virtual ~SortBufferBase() = default;
   virtual void addInput(const VectorPtr& input) = 0;
   virtual void noMoreInput() = 0;
   virtual RowVectorPtr getOutput(vector_size_t maxOutputRows) = 0;
@@ -41,9 +41,9 @@ class ISortBuffer {
 /// A utility class to accumulate data inside and output the sorted result.
 /// Spilling would be triggered if spilling is enabled and memory usage exceeds
 /// limit.
-class SortBuffer : public ISortBuffer {
+class MaterializedSortBuffer : public SortBufferBase {
  public:
-  SortBuffer(
+  MaterializedSortBuffer(
       const RowTypePtr& input,
       const std::vector<column_index_t>& sortColumnIndices,
       const std::vector<CompareFlags>& sortCompareFlags,
@@ -53,7 +53,7 @@ class SortBuffer : public ISortBuffer {
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
-  ~SortBuffer();
+  ~MaterializedSortBuffer();
 
   void addInput(const VectorPtr& input);
 

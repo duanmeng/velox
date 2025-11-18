@@ -16,11 +16,11 @@
 
 #pragma once
 
+#include "velox/exec/MaterializedSortBuffer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/RowContainer.h"
-#include "velox/exec/SortBuffer.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
@@ -33,9 +33,9 @@ namespace facebook::velox::exec {
 /// columns are the vector indices and the row indices of each vector. After
 /// sorting, rows are gathered and copied from the input vectors using these
 /// indices.
-class HybridSortBuffer final : public ISortBuffer {
+class NonMaterializedSortBuffer final : public SortBufferBase {
  public:
-  HybridSortBuffer(
+  NonMaterializedSortBuffer(
       const RowTypePtr& input,
       const std::vector<column_index_t>& sortColumnIndices,
       const std::vector<CompareFlags>& sortCompareFlags,
@@ -45,7 +45,7 @@ class HybridSortBuffer final : public ISortBuffer {
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
-  ~HybridSortBuffer() override;
+  ~NonMaterializedSortBuffer() override;
 
   void addInput(const VectorPtr& input) override;
 
