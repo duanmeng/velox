@@ -93,10 +93,9 @@ class HybridSortBuffer final : public ISortBuffer {
   void prepareOutput(vector_size_t outputBatchSize);
 
   void gatherCopyOutput(
-      const RowVectorPtr& output,
       const RowVectorPtr& indexOutput,
-      const std::vector<char*, memory::StlAllocator<char*>>& sortedRows,
-      uint64_t offset) const;
+      uint64_t sortedRowOffset,
+      RowVector* output) const;
 
   // Sort the pointers to the rows in RowContainer (data_) instead of sorting
   // the rows.
@@ -121,8 +120,8 @@ class HybridSortBuffer final : public ISortBuffer {
   // Spill remaining sorted input vectors.
   void runSpill(
       NoRowContainerSpiller* spiller,
-      int64_t numInputs,
-      uint64_t offset) const;
+      int64_t numSpillRows,
+      uint64_t spillRowOffset);
 
   void finishInputSpill();
 
@@ -134,8 +133,7 @@ class HybridSortBuffer final : public ISortBuffer {
   // minimal memory mode and could not be spilled further.
   bool hasSpilled() const;
 
-  const RowTypePtr input_;
-  std::vector<RowVectorPtr> inputs_;
+  const RowTypePtr inputType_;
   const std::vector<SpillSortKey> sortingKeys_;
   const std::vector<CompareFlags> sortCompareFlags_;
 
@@ -153,12 +151,16 @@ class HybridSortBuffer final : public ISortBuffer {
 
   folly::Synchronized<common::SpillStats>* const spillStats_;
 
+  // Two index columns materialized in the row container to index each input
+  // row. The first column points to the vector in 'inputs_' and the second
+  // points to the row in the pointed vector.
+  const RowTypePtr indexType_{ROW({BIGINT(), BIGINT()})};
+
+  std::vector<RowVectorPtr> inputs_;
+  VectorPtr rowIndices_;
+
   // SpillFiles group for the input spills.
   std::vector<SpillFiles> inputSpillFileGroups_;
-
-  // Two additional index columns the vector indices and the row indices of each
-  // vector.
-  const RowTypePtr indexType_{ROW({BIGINT(), BIGINT()})};
 
   // The column projection map between 'input_' and sort columns in 'data_'.
   std::vector<IdentityProjection> columnMap_;
@@ -172,10 +174,10 @@ class HybridSortBuffer final : public ISortBuffer {
   bool noMoreInput_ = false;
 
   // The number of received input rows.
-  uint64_t numInputRows_ = 0;
+  uint64_t numInputRows_{0};
 
   // The number of received input bytes.
-  uint64_t numInputBytes_ = 0;
+  uint64_t numInputBytes_{0};
 
   // Used to store the input data in row format.
   std::unique_ptr<RowContainer> data_;
