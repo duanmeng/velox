@@ -23,7 +23,7 @@
 namespace facebook::velox::exec {
 
 NonMaterializedSortBuffer::NonMaterializedSortBuffer(
-    const RowTypePtr& input,
+    const RowTypePtr& inputType,
     const std::vector<column_index_t>& sortColumnIndices,
     const std::vector<CompareFlags>& sortCompareFlags,
     velox::memory::MemoryPool* pool,
@@ -31,21 +31,17 @@ NonMaterializedSortBuffer::NonMaterializedSortBuffer(
     common::PrefixSortConfig prefixSortConfig,
     const common::SpillConfig* spillConfig,
     folly::Synchronized<velox::common::SpillStats>* spillStats)
-    : inputType_(input),
+    : SortBufferBase(
+          inputType,
+          sortColumnIndices,
+          sortCompareFlags,
+          pool,
+          nonReclaimableSection,
+          prefixSortConfig,
+          spillConfig,
+          spillStats),
       sortingKeys_(
-          SpillState::makeSortingKeys(sortColumnIndices, sortCompareFlags)),
-      sortCompareFlags_(sortCompareFlags),
-      pool_(pool),
-      nonReclaimableSection_(nonReclaimableSection),
-      prefixSortConfig_(prefixSortConfig),
-      spillConfig_(spillConfig),
-      spillStats_(spillStats),
-      sortedRows_(0, memory::StlAllocator<char*>(*pool)) {
-  VELOX_CHECK_GE(inputType_->children().size(), sortCompareFlags_.size());
-  VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
-  VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
-  VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
-
+          SpillState::makeSortingKeys(sortColumnIndices, sortCompareFlags)) {
   // Sorted key columns.
   std::vector<TypePtr> sortedColumnTypes;
   sortedColumnTypes.reserve(sortColumnIndices.size());
@@ -120,14 +116,6 @@ void NonMaterializedSortBuffer::addInput(const VectorPtr& input) {
   numInputBytes_ += input->retainedSize();
 }
 
-void NonMaterializedSortBuffer::sortInput(uint64_t numRows) {
-  sortedRows_.resize(numRows);
-  RowContainerIterator iter;
-  data_->listRows(&iter, numRows, sortedRows_.data());
-  PrefixSort::sort(
-      data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
-}
-
 void NonMaterializedSortBuffer::noMoreInput() {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::HybridSortBuffer::noMoreInput", this);
@@ -159,37 +147,6 @@ void NonMaterializedSortBuffer::noMoreInput() {
   pool_->release();
 }
 
-RowVectorPtr NonMaterializedSortBuffer::getOutput(vector_size_t maxOutputRows) {
-  SCOPE_EXIT {
-    pool_->release();
-  };
-
-  VELOX_CHECK(noMoreInput_);
-
-  // TODO: Track the vectors in 'inputs_' and evict any vector once all of its
-  // rows have been copied to the output.
-  if (numOutputRows_ == numInputRows_) {
-    inputs_.clear();
-    data_->clear();
-    return nullptr;
-  }
-  VELOX_CHECK_GT(maxOutputRows, 0);
-  VELOX_CHECK_GT(numInputRows_, numOutputRows_);
-  const vector_size_t batchSize =
-      std::min<uint64_t>(numInputRows_ - numOutputRows_, maxOutputRows);
-
-  ensureOutputFits(batchSize);
-  prepareOutput(batchSize);
-
-  if (hasSpilled()) {
-    getOutputWithSpill();
-  } else {
-    getOutputWithoutSpill();
-  }
-
-  return output_;
-}
-
 bool NonMaterializedSortBuffer::hasSpilled() const {
   if (inputSpiller_ != nullptr) {
     VELOX_CHECK_NULL(outputSpiller_);
@@ -198,43 +155,8 @@ bool NonMaterializedSortBuffer::hasSpilled() const {
   return outputSpiller_ != nullptr;
 }
 
-void NonMaterializedSortBuffer::spill() {
-  VELOX_CHECK_NOT_NULL(
-      spillConfig_,
-      "spill config is null when HybridSortBuffer spill is called");
-
-  // Check if sort buffer is empty or not, and skip spill if it is empty.
-  if (data_->numRows() == 0) {
-    return;
-  }
-
-  if (sortedRows_.empty()) {
-    spillInput();
-  } else {
-    spillOutput();
-  }
-}
-
-std::optional<uint64_t> NonMaterializedSortBuffer::estimateOutputRowSize()
-    const {
-  return estimatedOutputRowSize_;
-}
-
-void NonMaterializedSortBuffer::ensureInputFits(const VectorPtr& input) {
-  // Check if spilling is enabled or not.
-  if (spillConfig_ == nullptr) {
-    return;
-  }
-
-  const int64_t numRows = data_->numRows();
-  if (numRows == 0) {
-    // 'data_' is empty. Nothing to spill.
-    return;
-  }
-
-  auto [freeRows, outOfLineFreeBytes] = data_->freeSpace();
-  const auto outOfLineBytes =
-      data_->stringAllocator().retainedSize() - outOfLineFreeBytes;
+int64_t NonMaterializedSortBuffer::estimateFlatInputBytes(
+    const VectorPtr& input) const {
   int64_t flatInputBytes{0};
   const auto inputRowVector = input->asUnchecked<RowVector>();
   for (const auto identity : columnMap_) {
@@ -242,82 +164,21 @@ void NonMaterializedSortBuffer::ensureInputFits(const VectorPtr& input) {
         inputRowVector->childAt(identity.outputChannel)->estimateFlatSize();
   }
   flatInputBytes += indexColumnMap_.size() * sizeof(int64_t) * input->size();
-
-  // Test-only spill path.
-  if (numRows > 0 && testingTriggerSpill(pool_->name())) {
-    spill();
-    return;
-  }
-
-  const auto currentMemoryUsage = pool_->usedBytes();
-  const auto minReservationBytes =
-      currentMemoryUsage * spillConfig_->minSpillableReservationPct / 100;
-  const auto availableReservationBytes = pool_->availableReservation();
-  const int64_t estimatedIncrementalBytes =
-      data_->sizeIncrement(input->size(), outOfLineBytes ? flatInputBytes : 0) +
-      input->retainedSize();
-  if (availableReservationBytes > minReservationBytes) {
-    // If we have enough free rows for input rows and enough variable length
-    // free space for the vector's flat size, no need for spilling.
-    if (freeRows > input->size() &&
-        (outOfLineBytes == 0 || outOfLineFreeBytes >= flatInputBytes)) {
-      return;
-    }
-
-    // If the current available reservation in memory pool is 2X the
-    // estimatedIncrementalBytes, no need to spill.
-    if (availableReservationBytes > 2 * estimatedIncrementalBytes) {
-      return;
-    }
-  }
-
-  // Try reserving targetIncrementBytes more in memory pool, if succeed, no
-  // need to spill.
-  const auto targetIncrementBytes = std::max<int64_t>(
-      estimatedIncrementalBytes * 2,
-      currentMemoryUsage * spillConfig_->spillableReservationGrowthPct / 100);
-  {
-    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
-    if (pool_->maybeReserve(targetIncrementBytes)) {
-      return;
-    }
-  }
-  LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
-               << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+  return flatInputBytes;
 }
 
-void NonMaterializedSortBuffer::ensureOutputFits(vector_size_t batchSize) {
-  VELOX_CHECK_GT(batchSize, 0);
-  // Check if spilling is enabled or not.
-  if (spillConfig_ == nullptr) {
-    return;
-  }
+int64_t NonMaterializedSortBuffer::estimateIncrementalBytes(
+    const VectorPtr& input,
+    uint64_t outOfLineBytes,
+    int64_t flatInputBytes) const {
+  return data_->sizeIncrement(
+             input->size(), outOfLineBytes ? flatInputBytes : 0) +
+      input->retainedSize();
+}
 
-  // Test-only spill path.
-  if (testingTriggerSpill(pool_->name())) {
-    spill();
-    return;
-  }
-
-  if (!estimatedOutputRowSize_.has_value() || hasSpilled()) {
-    return;
-  }
-
-  const uint64_t outputBufferSizeToReserve =
-      estimatedOutputRowSize_.value() * batchSize * 1.2;
-  {
-    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
-    if (pool_->maybeReserve(outputBufferSizeToReserve)) {
-      return;
-    }
-  }
-  LOG(WARNING) << "Failed to reserve "
-               << succinctBytes(outputBufferSizeToReserve)
-               << " for memory pool " << pool_->name()
-               << ", usage: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes());
+std::optional<uint64_t> NonMaterializedSortBuffer::estimateOutputRowSize()
+    const {
+  return estimatedOutputRowSize_;
 }
 
 void NonMaterializedSortBuffer::ensureSortFits() {
@@ -336,30 +197,13 @@ void NonMaterializedSortBuffer::ensureSortFits() {
     return;
   }
 
-  // The memory for std::vector sorted rows and prefix sort required buffer.
-  const auto numBytesToReserve =
-      numInputRows_ * sizeof(char*) +
-      PrefixSort::maxRequiredBytes(
-          data_.get(), sortCompareFlags_, prefixSortConfig_, pool_);
-  {
-    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
-    if (pool_->maybeReserve(numBytesToReserve)) {
-      return;
-    }
-  }
-
-  LOG(WARNING) << fmt::format(
-      "Failed to reserve {} for memory pool {}, usage: {}, reservation: {}",
-      succinctBytes(numBytesToReserve),
-      pool_->name(),
-      succinctBytes(pool_->usedBytes()),
-      succinctBytes(pool_->reservedBytes()));
+  ensureSortFitsImpl();
 }
 
 void NonMaterializedSortBuffer::runSpill(
     NoRowContainerSpiller* spiller,
     int64_t numSpillRows,
-    uint64_t spillRowOffset) {
+    uint64_t spillRowOffset) const {
   RowVectorPtr output;
   RowVectorPtr indexOutput;
   int64_t numOutputs{0};

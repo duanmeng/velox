@@ -60,9 +60,10 @@ OrderBy::OrderBy(
         fromSortOrderToCompareFlags(orderByNode->sortingOrders()[i]));
   }
 
-  const auto hybridSortEanbled = driverCtx->queryConfig().hybridSortEnabled();
-  if (hybridSortEanbled) {
-    sortBuffer_ = std::make_unique<NonMaterializedSortBuffer>(
+  const auto materializedSortBufferEnabled =
+      driverCtx->queryConfig().materializedSortBufferEnabled();
+  if (materializedSortBufferEnabled) {
+    sortBuffer_ = std::make_unique<MaterializedSortBuffer>(
         outputType_,
         sortColumnIndices,
         sortCompareFlags,
@@ -72,7 +73,7 @@ OrderBy::OrderBy(
         spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
         spillStats_.get());
   } else {
-    sortBuffer_ = std::make_unique<MaterializedSortBuffer>(
+    sortBuffer_ = std::make_unique<NonMaterializedSortBuffer>(
         outputType_,
         sortColumnIndices,
         sortCompareFlags,

@@ -505,7 +505,8 @@ class QueryConfig {
       "prefixsort_max_string_prefix_length";
 
   /// Enable hybrid sort.
-  static constexpr const char* kHybridSortEnabled = "hybrid_sort_enabled";
+  static constexpr const char* kMaterializedSortBufferEnabled =
+      "materialized_sort_buffer_enabled";
 
   /// Enable query tracing flag.
   static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
@@ -1073,8 +1074,8 @@ class QueryConfig {
     return get<int32_t>(kSpillableReservationGrowthPct, kDefaultPct);
   }
 
-  bool hybridSortEnabled() const {
-    return get<bool>(kHybridSortEnabled, true);
+  bool materializedSortBufferEnabled() const {
+    return get<bool>(kMaterializedSortBufferEnabled, true);
   }
 
   bool queryTraceEnabled() const {

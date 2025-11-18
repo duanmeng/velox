@@ -58,6 +58,7 @@ velox_add_library(
   NestedLoopJoinBuild.cpp
   NestedLoopJoinProbe.cpp
   NonMaterializedSortBuffer.cpp
+  SortBufferBase.cpp
   SpatialIndex.cpp
   SpatialJoinBuild.cpp
   SpatialJoinProbe.cpp
