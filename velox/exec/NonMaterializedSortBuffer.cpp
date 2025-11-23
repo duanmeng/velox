@@ -29,6 +29,7 @@ NonMaterializedSortBuffer::NonMaterializedSortBuffer(
     velox::memory::MemoryPool* pool,
     tsan_atomic<bool>* nonReclaimableSection,
     common::PrefixSortConfig prefixSortConfig,
+    exec::Operator* const op,
     const common::SpillConfig* spillConfig,
     folly::Synchronized<velox::common::SpillStats>* spillStats)
     : SortBufferBase(
@@ -41,7 +42,8 @@ NonMaterializedSortBuffer::NonMaterializedSortBuffer(
           /*spillConfig=*/nullptr,
           /*spillStats=*/nullptr),
       sortingKeys_(
-          SpillState::makeSortingKeys(sortColumnIndices, sortCompareFlags)) {
+          SpillState::makeSortingKeys(sortColumnIndices, sortCompareFlags)),
+      op_(op) {
   // Sorted key columns.
   std::vector<TypePtr> sortedColumnTypes;
   sortedColumnTypes.reserve(sortColumnIndices.size());
@@ -195,31 +197,41 @@ void NonMaterializedSortBuffer::gatherCopyOutput() {
   };
   VELOX_DCHECK_EQ(numInputRows_, sortedRows_.size());
   VELOX_CHECK_NOT_NULL(output_);
-  for (const auto& columnProjection : indexColumnMap_) {
-    data_->extractColumn(
-        sortedRows_.data() + numOutputRows_,
-        outputIndex_->size(),
-        columnProjection.inputChannel,
-        outputIndex_->childAt(columnProjection.outputChannel));
-  }
-
-  // Extracts vector indices.
   std::vector<const RowVector*> sourceVectors;
-  sourceVectors.reserve(outputIndex_->size());
-  const auto* vectorIndices =
-      outputIndex_->childAt(0)->asChecked<FlatVector<int64_t>>();
-  for (auto i = 0; i < outputIndex_->size(); ++i) {
-    sourceVectors.push_back(inputs_[vectorIndices->rawValues()[i]].get());
-  }
-
-  // Extracts row indices.
   std::vector<vector_size_t> sourceRowIndices;
-  sourceRowIndices.reserve(outputIndex_->size());
-  const auto* rowIndices =
-      outputIndex_->childAt(1)->asChecked<FlatVector<int64_t>>();
-  for (auto i = 0; i < outputIndex_->size(); ++i) {
-    sourceRowIndices.push_back(rowIndices->rawValues()[i]);
+  uint64_t extractNs{0};
+  {
+    NanosecondTimer timer(&extractNs);
+    for (const auto& columnProjection : indexColumnMap_) {
+      data_->extractColumn(
+          sortedRows_.data() + numOutputRows_,
+          outputIndex_->size(),
+          columnProjection.inputChannel,
+          outputIndex_->childAt(columnProjection.outputChannel));
+    }
+
+    // Extracts vector indices.
+
+    sourceVectors.reserve(outputIndex_->size());
+    const auto* vectorIndices =
+        outputIndex_->childAt(0)->asChecked<FlatVector<int64_t>>();
+    for (auto i = 0; i < outputIndex_->size(); ++i) {
+      sourceVectors.push_back(inputs_[vectorIndices->rawValues()[i]].get());
+    }
+
+    // Extracts row indices.
+
+    sourceRowIndices.reserve(outputIndex_->size());
+    const auto* rowIndices =
+        outputIndex_->childAt(1)->asChecked<FlatVector<int64_t>>();
+    for (auto i = 0; i < outputIndex_->size(); ++i) {
+      sourceRowIndices.push_back(rowIndices->rawValues()[i]);
+    }
   }
+  op_->addRuntimeStat(
+      "IndexExtractionTime",
+      RuntimeCounter{
+          static_cast<int64_t>(extractNs), RuntimeCounter::Unit::kNone});
 
   gatherCopy(
       output_.get(), 0, output_->size(), sourceVectors, sourceRowIndices);

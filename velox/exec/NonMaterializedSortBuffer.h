@@ -43,6 +43,7 @@ class NonMaterializedSortBuffer final : public SortBufferBase {
       velox::memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection,
       common::PrefixSortConfig prefixSortConfig,
+      exec::Operator* const op,
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
@@ -84,6 +85,8 @@ class NonMaterializedSortBuffer final : public SortBufferBase {
   // row. The first column points to the vector in 'inputs_' and the second
   // points to the row in the pointed vector.
   const RowTypePtr indexType_{ROW({BIGINT(), BIGINT()})};
+
+  exec::Operator* const op_;
 
   // The sort columns projection map between 'input_' and 'sortingKeys_' as sort
   // buffer stores the sort columns first in 'data_'.

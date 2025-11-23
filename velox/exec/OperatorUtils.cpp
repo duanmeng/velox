@@ -107,7 +107,11 @@ void gatherCopy(
       std::all_of(sources.begin(), sources.end(), [](const auto& source) {
         return source->isFlatEncoding();
       });
-  if (target->isScalar() && flattenSources) {
+  const auto* ss = sources[0];
+  for (auto i = 1; i < sources.size(); ++i) {
+    VELOX_CHECK(ss == sources[i]);
+  }
+  if (target->isScalar()) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         scalarGatherCopy,
         target->type()->kind(),

@@ -15,106 +15,159 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
-#include <iostream>
 
-#include "glog/logging.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/benchmarks/OrderByBenchmarkUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/TypeResolver.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
+DEFINE_int32(num_payload_groups, 32, "");
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
+using namespace facebook::velox::test;
 
 namespace {
-
 struct TestCase {
-  vector_size_t numRows;
-  RowTypePtr rowType;
-  int numKeys;
+  // Dataset to be processed by the below plans.
+  std::vector<RowVectorPtr> rows;
+  // OrderBy plan.
+  std::shared_ptr<const core::PlanNode> plan;
 };
 
-class OrderByBenchmark {
+class OrderByBenchmark : public VectorTestBase {
  public:
-  void addBenchmark(
-      const std::string& benchmarkName,
-      vector_size_t numRows,
-      const RowTypePtr& rowType,
-      int32_t iterations,
-      int numKeys) {
-    TestCase testCase = {numRows, rowType, numKeys};
-    {
-      folly::addBenchmark(
-          __FILE__,
-          "OrderBy_" + benchmarkName,
-          [test = testCase, iterations = std::max(1, iterations / 10), this]() {
-            core::PlanNodeId orderByNodeId;
-            const auto plan = makeOrderByPlan(test, orderByNodeId);
-            uint64_t inputNs = 0;
-            uint64_t outputNs = 0;
-            uint64_t finishNs = 0;
-            const auto start = getCurrentTimeMicro();
-            for (auto i = 0; i < iterations; ++i) {
-              std::shared_ptr<Task> task;
-              test::AssertQueryBuilder(plan).runWithoutResults(task);
-              auto taskStats = exec::toPlanStats(task->taskStats());
-              auto& stats = taskStats.at(orderByNodeId);
-              inputNs += stats.addInputTiming.wallNanos;
-              finishNs += stats.finishTiming.wallNanos;
-              outputNs += stats.getOutputTiming.wallNanos;
-            }
-            const uint64_t total = getCurrentTimeMicro() - start;
-            std::cout << "Total " << succinctMicros(total) << " Input "
-                      << succinctNanos(inputNs) << " Output "
-                      << succinctNanos(outputNs) << " Finish "
-                      << succinctNanos(finishNs) << std::endl;
-            return 1;
-          });
-    }
-  }
-
- private:
-  core::PlanNodePtr makeOrderByPlan(
-      const TestCase& test,
-      core::PlanNodeId& orderByNodeId) {
-    folly::BenchmarkSuspender suspender;
+  std::vector<RowVectorPtr>
+  makeRows(RowTypePtr type, int32_t numVectors, int32_t rowsPerVector) {
     std::vector<RowVectorPtr> vectors;
-    vectors.emplace_back(
-        OrderByBenchmarkUtil::fuzzRows(
-            test.rowType, test.numRows, pool_.get()));
-
-    std::vector<std::string> keys;
-    keys.reserve(test.numKeys);
-    for (auto i = 0; i < test.numKeys; i++) {
-      keys.emplace_back(fmt::format("c{} ASC NULLS LAST", i));
+    for (int32_t i = 0; i < numVectors; ++i) {
+      auto vector = std::dynamic_pointer_cast<RowVector>(
+          BatchMaker::createBatch(type, rowsPerVector, *pool_));
+      for (auto i = 0; i < vector->childrenSize(); ++i) {
+        BaseVector::flattenVector(vector->childAt(i));
+        VELOX_CHECK(VectorEncoding::isFlat(vector->childAt(i)->encoding()));
+      }
+      vectors.push_back(vector);
     }
-
-    return test::PlanBuilder()
-        .values(vectors)
-        .orderBy(keys, false)
-        .capturePlanNodeId(orderByNodeId)
-        .planNode();
+    return vectors;
   }
 
-  std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{
-      rootPool_->addLeafChild("OrderByBenchmark")};
+  std::vector<RowVectorPtr> makeOrderedVectors(
+      int32_t numPayloadGrouops,
+      int64_t numVectors,
+      int32_t numPerVector) {
+    const auto type = makeRowType(numPayloadGrouops);
+    const auto rows = makeRows(type, numVectors, numPerVector);
+    const auto plan = makeOrderByPlan({"c0", "c1", "c2"}, rows);
+    const auto results =
+        exec::test::AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kMaxOutputBatchRows, numPerVector)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, numPerVector)
+            .copyResultBatches(pool_.get());
+    return results;
+  }
+
+  static core::PlanNodePtr makeOrderByPlan(
+      std::vector<std::string> keys,
+      std::vector<RowVectorPtr> data) {
+    exec::test::PlanBuilder builder;
+    builder.values(std::move(data));
+    builder.orderBy(keys, false);
+    return builder.planNode();
+  }
+
+  static RowTypePtr makeRowType(int numPayloadGroups) {
+    std::vector<TypePtr> types{BIGINT(), BIGINT(), BIGINT()};
+    for (auto i = 0; i < numPayloadGroups; ++i) {
+      types.push_back(BIGINT());
+      types.push_back(VARCHAR());
+      types.push_back(DOUBLE());
+      types.push_back(BOOLEAN());
+    }
+    return {VectorMaker::rowType(std::move(types))};
+  }
+
+  void makeBenchmark(
+      std::string name,
+      int32_t numPayloadGrouops,
+      int64_t numVectors,
+      int32_t numPerVector) {
+    auto test = std::make_unique<TestCase>();
+    const auto type = makeRowType(numPayloadGrouops);
+    // test->rows = makeRows(type, numVectors, numPerVector);
+    test->rows =
+        makeOrderedVectors(numPayloadGrouops, numVectors, numPerVector);
+    test->plan = makeOrderByPlan({"c0", "c1", "c2"}, test->rows);
+    folly::addBenchmark(
+        __FILE__,
+        fmt::format("{}_base_{}_payload_groups", name, numPayloadGrouops),
+        [plan = &test->plan, this]() {
+          run(*plan, false);
+          return 1;
+        });
+    folly::addBenchmark(
+        __FILE__,
+        fmt::format(
+            "{}_non_materialize_{}_payload_groups", name, numPayloadGrouops),
+        [plan = &test->plan, this]() {
+          run(*plan, true);
+          return 1;
+        });
+    cases_.push_back(std::move(test));
+  }
+
+  int64_t run(std::shared_ptr<const core::PlanNode> plan, bool nonMaterialized)
+      const {
+    const auto start = getCurrentTimeMicro();
+    std::shared_ptr<Task> task;
+    exec::test::AssertQueryBuilder(plan)
+        .config(
+            core::QueryConfig::kNonMaterializedSortBufferEnabled,
+            nonMaterialized)
+        .runWithoutResults(task);
+    auto taskStats = toPlanStats(task->taskStats());
+    const auto orderByNode = core::PlanNode::findFirstNode(
+        plan.get(),
+        [](const core::PlanNode* node) { return node->name() == "OrderBy"; });
+    const auto orderByNodeId = orderByNode->id();
+    auto& stats = taskStats.at(orderByNodeId);
+    const auto addInputWallNanos = stats.addInputTiming.wallNanos;
+    const auto addInputCpuNanos = stats.addInputTiming.cpuNanos;
+    const auto finishWallNanos = stats.finishTiming.wallNanos;
+    const auto finishCpuNanos = stats.finishTiming.cpuNanos;
+    const auto sortTimeNanos = stats.finishTiming.wallNanos;
+    const auto getOutputWallNanos = stats.getOutputTiming.wallNanos;
+    const auto getOutputCpuNanos = stats.getOutputTiming.cpuNanos;
+    const auto indexExtractionWallNanos =
+        stats.customStats["IndexExtractionTime"].sum;
+    std::cout << "Velox stats " << nonMaterialized << " Input "
+              << succinctNanos(addInputWallNanos) << " "
+              << " Output " << succinctNanos(getOutputWallNanos) << " "
+              << " IndexExtraction " << succinctNanos(indexExtractionWallNanos)
+              << " "
+              << " Finish " << succinctNanos(finishWallNanos) << " "
+              << std::endl;
+    return getCurrentTimeMicro() - start;
+  }
+
+  std::vector<std::unique_ptr<TestCase>> cases_;
 };
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::Init init(&argc, &argv);
+  folly::Init init{&argc, &argv};
+  memory::initializeMemoryManager(memory::MemoryManager::Options{});
+  functions::prestosql::registerAllScalarFunctions();
+  aggregate::prestosql::registerAllAggregateFunctions();
+  parse::registerTypeResolver();
 
-  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   OrderByBenchmark bm;
-  OrderByBenchmarkUtil::addBenchmarks([&](const std::string& benchmarkName,
-                                          vector_size_t numRows,
-                                          const RowTypePtr& rowType,
-                                          int iterations,
-                                          int numKeys) {
-    bm.addBenchmark(benchmarkName, numRows, rowType, iterations, numKeys);
-  });
+  bm.makeBenchmark("OrderBy", FLAGS_num_payload_groups, 5000, 1024);
 
   folly::runBenchmarks();
   return 0;

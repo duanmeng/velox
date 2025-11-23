@@ -70,6 +70,7 @@ OrderBy::OrderBy(
         pool(),
         &nonReclaimableSection_,
         driverCtx->prefixSortConfig(),
+        this,
         spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
         spillStats_.get());
   } else {
@@ -115,7 +116,7 @@ RowVectorPtr OrderBy::getOutput() {
     return nullptr;
   }
 
-  RowVectorPtr output = sortBuffer_->getOutput(maxOutputRows_);
+  RowVectorPtr output = sortBuffer_->getOutput(1024);
   finished_ = (output == nullptr);
   return output;
 }
