@@ -133,6 +133,10 @@ void NonMaterializedSortBuffer::noMoreInput() {
   VELOX_CHECK_EQ(numInputRows_, data_->numRows());
   sortInput(numInputRows_);
 
+  LOG(ERROR) << "NonMaterialize peak memory: "
+             << inputs_[0]->pool()->peakBytes() << " used byptes "
+             << inputs_[1]->pool()->usedBytes();
+
   // Releases the unused memory reservation after procesing input.
   pool_->release();
 }

@@ -43,7 +43,7 @@ class NonMaterializedSortBuffer final : public SortBufferBase {
       velox::memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection,
       common::PrefixSortConfig prefixSortConfig,
-      exec::Operator* const op,
+      exec::Operator* const op = nullptr,
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 

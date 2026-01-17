@@ -26,7 +26,11 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-DEFINE_int32(num_payload_groups, 32, "");
+DEFINE_int32(num_payload_groups, 32, "num of payload groups in each vector");
+DEFINE_int32(num_input_vectors, 1000, "num of input vectors");
+DEFINE_int32(num_rows_per_vector, 1024, "num of rows per vector");
+DEFINE_bool(sort_inputs, false, "sort input vectors");
+DEFINE_bool(columnar, true, "Use columnar sort");
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -84,10 +88,10 @@ class OrderByBenchmark : public VectorTestBase {
   static RowTypePtr makeRowType(int numPayloadGroups) {
     std::vector<TypePtr> types{BIGINT(), BIGINT(), BIGINT()};
     for (auto i = 0; i < numPayloadGroups; ++i) {
-      types.push_back(BIGINT());
       types.push_back(VARCHAR());
-      types.push_back(DOUBLE());
-      types.push_back(BOOLEAN());
+      types.push_back(VARCHAR());
+      types.push_back(VARCHAR());
+      types.push_back(VARCHAR());
     }
     return {VectorMaker::rowType(std::move(types))};
   }
@@ -99,23 +103,19 @@ class OrderByBenchmark : public VectorTestBase {
       int32_t numPerVector) {
     auto test = std::make_unique<TestCase>();
     const auto type = makeRowType(numPayloadGrouops);
-    // test->rows = makeRows(type, numVectors, numPerVector);
-    test->rows =
+    if (FLAGS_sort_inputs) {
+      test->rows =
         makeOrderedVectors(numPayloadGrouops, numVectors, numPerVector);
+    } else {
+      test->rows = makeRows(type, numVectors, numPerVector);
+    }
     test->plan = makeOrderByPlan({"c0", "c1", "c2"}, test->rows);
     folly::addBenchmark(
         __FILE__,
-        fmt::format("{}_base_{}_payload_groups", name, numPayloadGrouops),
-        [plan = &test->plan, this]() {
-          run(*plan, false);
-          return 1;
-        });
-    folly::addBenchmark(
-        __FILE__,
         fmt::format(
-            "{}_non_materialize_{}_payload_groups", name, numPayloadGrouops),
+            "{}_{}_{}_payload_groups", name, FLAGS_columnar, numPayloadGrouops),
         [plan = &test->plan, this]() {
-          run(*plan, true);
+          run(*plan, FLAGS_columnar);
           return 1;
         });
     cases_.push_back(std::move(test));
@@ -167,7 +167,7 @@ int main(int argc, char** argv) {
   parse::registerTypeResolver();
 
   OrderByBenchmark bm;
-  bm.makeBenchmark("OrderBy", FLAGS_num_payload_groups, 5000, 1024);
+  bm.makeBenchmark("OrderBy", FLAGS_num_payload_groups, FLAGS_num_input_vectors, 1024);
 
   folly::runBenchmarks();
   return 0;

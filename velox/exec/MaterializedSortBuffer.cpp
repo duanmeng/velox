@@ -110,6 +110,10 @@ void MaterializedSortBuffer::noMoreInput() {
   VELOX_CHECK(!noMoreInput_);
   VELOX_CHECK_NULL(outputSpiller_);
 
+  LOG(ERROR) << "NonMaterialize peak memory: "
+             << pool()->peakBytes() << " used byptes "
+             << pool()->usedBytes();
+
   // It may trigger spill, make sure it's triggered before noMoreInput_ is set.
   ensureSortFits();
 

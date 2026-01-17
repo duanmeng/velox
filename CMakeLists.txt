@@ -21,6 +21,7 @@ message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
 # The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-restrict -Wno-range-loop-construct")
 
 # Sets new behavior for CMP0135, which controls how timestamps are extracted
 # when using ExternalProject_Add():

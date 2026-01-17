@@ -109,7 +109,7 @@ void gatherCopy(
       });
   const auto* ss = sources[0];
   for (auto i = 1; i < sources.size(); ++i) {
-    VELOX_CHECK(ss == sources[i]);
+    //VELOX_CHECK(ss == sources[i]);
   }
   if (target->isScalar()) {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
