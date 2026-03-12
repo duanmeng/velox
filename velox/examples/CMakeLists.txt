@@ -79,3 +79,5 @@ target_link_libraries(
   velox_memory
   velox_vector_test_lib
 )
+
+add_subdirectory(paimon)
