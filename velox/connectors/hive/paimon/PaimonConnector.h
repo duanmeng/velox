@@ -39,6 +39,8 @@ class PaimonConnector final : public HiveConnector {
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
+  static void registerSerDe();
+
  private:
   const std::shared_ptr<PaimonConfig> paimonConfig_;
 };

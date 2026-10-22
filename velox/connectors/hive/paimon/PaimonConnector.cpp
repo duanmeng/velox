@@ -16,6 +16,7 @@
 #include "velox/connectors/hive/paimon/PaimonConnector.h"
 
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -31,6 +32,15 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
+  // The legacy reader does not interpret the fixed-schema handle contract.
+  VELOX_USER_CHECK(
+      !dynamic_cast<const PaimonTableHandle*>(tableHandle.get()),
+      "PaimonTableHandle task reads are not supported");
+  for (const auto& [_, column] : columnHandles) {
+    VELOX_USER_CHECK(
+        !dynamic_cast<const PaimonColumnHandle*>(column.get()),
+        "PaimonColumnHandle task reads are not supported");
+  }
   return std::make_unique<PaimonDataSource>(
       outputType,
       tableHandle,
@@ -39,6 +49,13 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
       ioExecutor_,
       connectorQueryCtx,
       paimonConfig_);
+}
+
+void PaimonConnector::registerSerDe() {
+  HiveConnector::registerSerDe();
+  PaimonColumnHandle::registerSerDe();
+  PaimonTableHandle::registerSerDe();
+  PaimonConnectorSplit::registerSerDe();
 }
 
 } // namespace facebook::velox::connector::hive::paimon

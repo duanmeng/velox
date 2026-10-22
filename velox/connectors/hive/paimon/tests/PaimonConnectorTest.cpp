@@ -24,6 +24,7 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -447,6 +448,38 @@ TEST_F(PaimonConnectorTest, appendOnlyMultipleSplits) {
   exec::test::AssertQueryBuilder(plan)
       .splits({split1, split2})
       .assertResults(expected);
+}
+
+TEST_F(PaimonConnectorTest, fixedSchemaHandlesRequireTaskIntegration) {
+  Type::registerSerDe();
+  PaimonConnector::registerSerDe();
+  const auto type = ROW({{"c0", BIGINT()}});
+  const auto schema = std::make_shared<PaimonSchema>(
+      1,
+      3,
+      type,
+      PaimonTypeMetadata{
+          "ROW", false, std::nullopt, {}, {{"BIGINT", true, 7}}});
+  const auto handle = std::make_shared<PaimonTableHandle>(
+      kPaimonConnectorId,
+      "paimon_table",
+      "/warehouse/paimon_table",
+      PaimonTableType::kAppendOnly,
+      1,
+      std::vector<PaimonSchemaPtr>{schema});
+  const auto restored =
+      ISerializable::deserialize<PaimonTableHandle>(handle->serialize());
+  const auto column = ISerializable::deserialize<PaimonColumnHandle>(
+      handle->columnHandle(7)->serialize());
+  auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+  VELOX_ASSERT_THROW(
+      connector->createDataSource(
+          type, restored, makePaimonColumnHandles(type), nullptr),
+      "PaimonTableHandle task reads are not supported");
+  VELOX_ASSERT_THROW(
+      connector->createDataSource(
+          type, makePaimonTableHandle(type), {{"c0", column}}, nullptr),
+      "PaimonColumnHandle task reads are not supported");
 }
 
 } // namespace

@@ -28,6 +28,24 @@ velox_add_library(
 velox_link_libraries(velox_hive_paimon_split velox_connector velox_hive_connector fmt::fmt)
 
 velox_add_library(
+  velox_hive_paimon_handle
+  PaimonColumnHandle.cpp
+  PaimonSchema.cpp
+  PaimonTableHandle.cpp
+  HEADERS
+  PaimonColumnHandle.h
+  PaimonSchema.h
+  PaimonTableHandle.h
+)
+
+velox_link_libraries(
+  velox_hive_paimon_handle
+  velox_hive_paimon_split
+  velox_hive_connector
+  velox_core
+)
+
+velox_add_library(
   velox_hive_paimon_connector
   PaimonConnector.cpp
   PaimonDataSource.cpp
@@ -39,7 +57,12 @@ velox_add_library(
   PaimonSplitReader.h
 )
 
-velox_link_libraries(velox_hive_paimon_connector velox_hive_paimon_split velox_hive_connector)
+velox_link_libraries(
+  velox_hive_paimon_connector
+  velox_hive_paimon_split
+  velox_hive_paimon_handle
+  velox_hive_connector
+)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
