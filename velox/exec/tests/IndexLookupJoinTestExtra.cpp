@@ -45,6 +45,7 @@ struct TestParam {
   bool serialExecution;
   bool hasNullKeys;
   bool needsIndexSplit;
+  int32_t maxDrivers{1};
 
   TestParam(
       bool _asyncLookup,
@@ -60,12 +61,13 @@ struct TestParam {
 
   std::string toString() const {
     return fmt::format(
-        "asyncLookup={}, numPrefetches={}, serialExecution={}, hasNullKeys={}, needsIndexSplit={}",
+        "asyncLookup={}, numPrefetches={}, serialExecution={}, hasNullKeys={}, needsIndexSplit={}, maxDrivers={}",
         asyncLookup,
         numPrefetches,
         serialExecution,
         hasNullKeys,
-        needsIndexSplit);
+        needsIndexSplit,
+        maxDrivers);
   }
 };
 
@@ -85,12 +87,18 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
               if (serialExecution && needsIndexSplit) {
                 continue;
               }
-              testParams.emplace_back(
-                  asyncLookup,
-                  numPrefetches,
-                  serialExecution,
-                  hasNullKeys,
-                  needsIndexSplit);
+              for (int32_t maxDrivers : {1, 2, 4}) {
+                if (serialExecution && maxDrivers != 1) {
+                  continue;
+                }
+                testParams.emplace_back(
+                    asyncLookup,
+                    numPrefetches,
+                    serialExecution,
+                    hasNullKeys,
+                    needsIndexSplit);
+                testParams.back().maxDrivers = maxDrivers;
+              }
             }
           }
         }
@@ -661,10 +669,6 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
 }
 
 TEST_P(IndexLookupJoinTest, barrier) {
-  // Parallel cases remain disabled; only serial coverage is restored here.
-  if (!GetParam().serialExecution) {
-    return;
-  }
   if (GetParam().needsIndexSplit) {
     return;
   }
@@ -735,6 +739,8 @@ TEST_P(IndexLookupJoinTest, barrier) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
+    LOG(INFO) << "index barrier: " << GetParam().toString() << "; "
+              << testData.debugString();
     auto task = runLookupQuery(
         plan,
         probeFiles,
@@ -743,9 +749,15 @@ TEST_P(IndexLookupJoinTest, barrier) {
         32,
         testData.numPrefetches,
         GetParam().needsIndexSplit,
-        "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+        "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2",
+        GetParam().maxDrivers);
 
     const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numTotalDrivers, GetParam().maxDrivers);
+    LOG(INFO) << "index barrier completed: drivers="
+              << taskStats.numTotalDrivers
+              << ", barriers=" << taskStats.numBarriers
+              << ", finishedSplits=" << taskStats.numFinishedSplits;
     ASSERT_EQ(
         taskStats.numBarriers, testData.barrierExecution ? numProbeSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numProbeSplits);
@@ -2175,11 +2187,12 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(IndexLookupJoinTest::getTestParams()),
     [](const testing::TestParamInfo<TestParam>& info) {
       return fmt::format(
-          "{}_{}prefetches_{}_{}_{}",
+          "{}_{}prefetches_{}_{}_{}_{}drivers",
           info.param.asyncLookup ? "async" : "sync",
           info.param.numPrefetches,
           info.param.serialExecution ? "serial" : "parallel",
           info.param.hasNullKeys ? "nullKeys" : "noNullKeys",
-          info.param.needsIndexSplit ? "needsIndexSplit" : "noSplit");
+          info.param.needsIndexSplit ? "needsIndexSplit" : "noSplit",
+          info.param.maxDrivers);
     });
 } // namespace facebook::velox::exec::test

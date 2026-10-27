@@ -13,6 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <future>
+#include <optional>
+#include <thread>
+
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -25,7 +29,12 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
 namespace {
-class LimitTest : public HiveConnectorTestBase {};
+class LimitTest : public HiveConnectorTestBase {
+ protected:
+  void testBarrier(
+      int32_t maxDrivers,
+      std::optional<bool> barrierExecution = std::nullopt);
+};
 
 TEST_F(LimitTest, basic) {
   vector_size_t batchSize = 1'000;
@@ -147,7 +156,9 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
   test(false);
 }
 
-TEST_F(LimitTest, barrier) {
+void LimitTest::testBarrier(
+    int32_t maxDrivers,
+    std::optional<bool> barrierExecution) {
   std::vector<RowVectorPtr> vectors;
   std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
@@ -491,27 +502,87 @@ TEST_F(LimitTest, barrier) {
        numSplits},
   };
   for (const auto& testData : testSettings) {
-    // Parallel cases remain disabled; only serial coverage is restored here.
-    if (!testData.serialExecution) {
+    if (testData.serialExecution && maxDrivers != 1) {
+      continue;
+    }
+    if (barrierExecution.has_value() &&
+        testData.barrierExecution != barrierExecution.value()) {
       continue;
     }
     SCOPED_TRACE(testData.toString());
+    SCOPED_TRACE(fmt::format("maxDrivers={}", maxDrivers));
+    LOG(INFO) << "limit barrier: maxDrivers=" << maxDrivers << "; "
+              << testData.toString();
     core::PlanNodeId limitPlanNodeId;
     auto plan = PlanBuilder()
                     .tableScan(asRowType(vectors.back()->type()))
                     .limit(testData.offset, testData.limit, true)
                     .capturePlanNodeId(limitPlanNodeId)
                     .planNode();
-    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
-                    .splits(makeHiveConnectorSplits(tempFiles))
-                    .serialExecution(testData.serialExecution)
-                    .barrierExecution(testData.barrierExecution)
-                    .assertResults(
-                        fmt::format(
-                            "SELECT * FROM tmp LIMIT {} OFFSET {}",
-                            testData.limit,
-                            testData.offset));
+    AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
+    queryBuilder.splits(makeHiveConnectorSplits(tempFiles))
+        .serialExecution(testData.serialExecution)
+        .barrierExecution(testData.barrierExecution)
+        .maxDrivers(maxDrivers);
+    std::promise<void> queryFinished;
+    std::thread watchdog;
+    SCOPE_EXIT {
+      queryFinished.set_value();
+      if (watchdog.joinable()) {
+        watchdog.join();
+      }
+    };
+    queryBuilder.beforeTaskStart([&](Task& task) {
+      watchdog = std::thread([task = task.shared_from_this(),
+                              finished = queryFinished.get_future()]() mutable {
+        if (finished.wait_for(std::chrono::seconds(5)) ==
+            std::future_status::timeout) {
+          LOG(ERROR) << "Limit watchdog: drivers=" << task->numTotalDrivers()
+                     << ", finishedDrivers=" << task->numFinishedDrivers()
+                     << ", underBarrier=" << task->underBarrier()
+                     << ", barriers=" << task->taskStats().numBarriers << "\n"
+                     << task->toString();
+        }
+      });
+    });
+    std::shared_ptr<Task> task;
+    if (maxDrivers == 1) {
+      task = queryBuilder.assertResults(
+          fmt::format(
+              "SELECT * FROM tmp LIMIT {} OFFSET {}",
+              testData.limit,
+              testData.offset));
+    } else if (
+        testData.offset == 0 && testData.limit >= numSplits * numRowsPerSplit) {
+      task = queryBuilder.assertResults("SELECT * FROM tmp");
+    } else {
+      // Partial limits apply independently to each driver. Scheduling
+      // determines the exact cardinality, so the single-driver SQL result is
+      // not an oracle.
+      const auto numRows = queryBuilder.countResults(task);
+      const int totalInputRows = numSplits * numRowsPerSplit;
+      const auto minRows = std::min(
+          testData.limit,
+          std::max(0, totalInputRows - maxDrivers * testData.offset));
+      const auto maxRows = std::min(
+          maxDrivers * testData.limit,
+          std::max(0, totalInputRows - testData.offset));
+      EXPECT_GE(numRows, minRows);
+      EXPECT_LE(numRows, maxRows);
+    }
     const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numTotalDrivers, maxDrivers);
+    LOG(INFO) << "limit barrier completed: drivers="
+              << taskStats.numTotalDrivers
+              << ", barriers=" << taskStats.numBarriers
+              << ", finishedSplits=" << taskStats.numFinishedSplits
+              << ", outputRows="
+              << exec::toPlanStats(taskStats).at(limitPlanNodeId).outputRows;
+    if (maxDrivers > 1) {
+      EXPECT_LE(
+          taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
+      continue;
+    }
     ASSERT_EQ(taskStats.numBarriers, testData.numExpectedBarriers);
     if (testData.serialExecution) {
       ASSERT_EQ(
@@ -524,5 +595,25 @@ TEST_F(LimitTest, barrier) {
         exec::toPlanStats(taskStats).at(limitPlanNodeId).outputVectors,
         testData.numExpectedOutputBatches);
   }
+}
+
+TEST_F(LimitTest, barrier) {
+  testBarrier(1);
+}
+
+TEST_F(LimitTest, barrierTwoDrivers) {
+  testBarrier(2);
+}
+
+TEST_F(LimitTest, barrierFourDrivers) {
+  testBarrier(4);
+}
+
+TEST_F(LimitTest, barrierDisabledTwoDrivers) {
+  testBarrier(2, false);
+}
+
+TEST_F(LimitTest, barrierDisabledFourDrivers) {
+  testBarrier(4, false);
 }
 } // namespace

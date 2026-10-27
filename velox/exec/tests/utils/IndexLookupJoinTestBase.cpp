@@ -470,10 +470,14 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
     const PlanNodeId& probeScanNodeIdWithMatchColumn,
     const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
     bool needsIndexSplit,
-    bool serialExecution) {
+    bool serialExecution,
+    int maxDrivers,
+    bool barrierExecution) {
   AssertQueryBuilder expectedResultBuilder(duckDbQueryRunner_);
   expectedResultBuilder.plan(planWithoutMatchColumn)
       .serialExecution(serialExecution)
+      .maxDrivers(maxDrivers)
+      .barrierExecution(barrierExecution)
       .splits(
           probeScanNodeIdWithoutMatchColumn,
           makeHiveConnectorSplits(probeFiles));
@@ -484,12 +488,20 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
             std::make_shared<TestIndexConnectorSplit>(
                 kTestIndexConnectorName)));
   }
-  VectorPtr expectedResult = expectedResultBuilder.copyResults(pool());
+  std::shared_ptr<Task> expectedTask;
+  VectorPtr expectedResult =
+      expectedResultBuilder.copyResults(pool(), expectedTask);
+  ASSERT_EQ(expectedTask->numTotalDrivers(), maxDrivers);
+  LOG(INFO) << "match-column baseline completed: drivers="
+            << expectedTask->numTotalDrivers()
+            << ", barriers=" << expectedTask->taskStats().numBarriers;
   BaseVector::flattenVector(expectedResult);
 
   AssertQueryBuilder resultWithMatchColumnBuilder(duckDbQueryRunner_);
   resultWithMatchColumnBuilder.plan(planWithMatchColumn)
       .serialExecution(serialExecution)
+      .maxDrivers(maxDrivers)
+      .barrierExecution(barrierExecution)
       .splits(
           probeScanNodeIdWithMatchColumn, makeHiveConnectorSplits(probeFiles));
   if (needsIndexSplit) {
@@ -499,8 +511,13 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
             std::make_shared<TestIndexConnectorSplit>(
                 kTestIndexConnectorName)));
   }
+  std::shared_ptr<Task> resultTask;
   VectorPtr resultWithMatchColumn =
-      resultWithMatchColumnBuilder.copyResults(pool());
+      resultWithMatchColumnBuilder.copyResults(pool(), resultTask);
+  ASSERT_EQ(resultTask->numTotalDrivers(), maxDrivers);
+  LOG(INFO) << "match-column query completed: drivers="
+            << resultTask->numTotalDrivers()
+            << ", barriers=" << resultTask->taskStats().numBarriers;
   BaseVector::flattenVector(resultWithMatchColumn);
   auto rowResultWithMatchMatchColumn =
       std::dynamic_pointer_cast<RowVector>(resultWithMatchColumn);

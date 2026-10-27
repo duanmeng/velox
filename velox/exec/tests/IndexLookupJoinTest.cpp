@@ -46,6 +46,7 @@ struct TestParam {
   bool serialExecution;
   bool hasNullKeys;
   bool needsIndexSplit;
+  int32_t maxDrivers{1};
 
   TestParam(
       bool _asyncLookup,
@@ -61,12 +62,13 @@ struct TestParam {
 
   std::string toString() const {
     return fmt::format(
-        "asyncLookup={}, numPrefetches={}, serialExecution={}, hasNullKeys={}, needsIndexSplit={}",
+        "asyncLookup={}, numPrefetches={}, serialExecution={}, hasNullKeys={}, needsIndexSplit={}, maxDrivers={}",
         asyncLookup,
         numPrefetches,
         serialExecution,
         hasNullKeys,
-        needsIndexSplit);
+        needsIndexSplit,
+        maxDrivers);
   }
 };
 
@@ -86,12 +88,18 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
               if (serialExecution && needsIndexSplit) {
                 continue;
               }
-              testParams.emplace_back(
-                  asyncLookup,
-                  numPrefetches,
-                  serialExecution,
-                  hasNullKeys,
-                  needsIndexSplit);
+              for (int32_t maxDrivers : {1, 2, 4}) {
+                if (serialExecution && maxDrivers != 1) {
+                  continue;
+                }
+                testParams.emplace_back(
+                    asyncLookup,
+                    numPrefetches,
+                    serialExecution,
+                    hasNullKeys,
+                    needsIndexSplit);
+                testParams.back().maxDrivers = maxDrivers;
+              }
             }
           }
         }
@@ -854,10 +862,7 @@ TEST_F(IndexLookupJoinTest, forwardedProbeColumnOverlapsWithCondition) {
 }
 
 TEST_P(IndexLookupJoinTest, equalJoin) {
-  // Parallel cases remain disabled; only serial coverage is restored here.
-  if (!GetParam().serialExecution) {
-    return;
-  }
+  const bool barrierExecution = !GetParam().needsIndexSplit;
   struct {
     std::vector<int> keyCardinalities;
     int numProbeBatches;
@@ -1208,6 +1213,9 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
        "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
+    LOG(INFO) << "equalJoin: " << GetParam().toString()
+              << ", barrierExecution=" << barrierExecution << "; "
+              << testData.debugString();
 
     IndexTableData tableData;
     generateIndexTableData(testData.keyCardinalities, tableData, pool_);
@@ -1252,15 +1260,19 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         /*hasMarker=*/false,
         testData.joinType,
         testData.outputColumns);
-    runLookupQuery(
+    const auto task = runLookupQuery(
         plan,
         probeFiles,
         GetParam().serialExecution,
-        GetParam().serialExecution,
+        barrierExecution,
         32,
         GetParam().numPrefetches,
         GetParam().needsIndexSplit,
-        testData.duckDbVerifySql);
+        testData.duckDbVerifySql,
+        GetParam().maxDrivers);
+    ASSERT_EQ(task->numTotalDrivers(), GetParam().maxDrivers);
+    LOG(INFO) << "equalJoin completed: drivers=" << task->numTotalDrivers()
+              << ", barriers=" << task->taskStats().numBarriers;
     if (testData.joinType != core::JoinType::kLeft) {
       continue;
     }
@@ -1282,7 +1294,9 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         probeScanNodeId_,
         probeFiles,
         GetParam().needsIndexSplit,
-        GetParam().serialExecution);
+        GetParam().serialExecution,
+        GetParam().maxDrivers,
+        barrierExecution);
   }
 }
 
@@ -3430,11 +3444,12 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(IndexLookupJoinTest::getTestParams()),
     [](const testing::TestParamInfo<TestParam>& info) {
       return fmt::format(
-          "{}_{}prefetches_{}_{}_{}",
+          "{}_{}prefetches_{}_{}_{}_{}drivers",
           info.param.asyncLookup ? "async" : "sync",
           info.param.numPrefetches,
           info.param.serialExecution ? "serial" : "parallel",
           info.param.hasNullKeys ? "nullKeys" : "noNullKeys",
-          info.param.needsIndexSplit ? "needsIndexSplit" : "noSplit");
+          info.param.needsIndexSplit ? "needsIndexSplit" : "noSplit",
+          info.param.maxDrivers);
     });
 } // namespace facebook::velox::exec::test
