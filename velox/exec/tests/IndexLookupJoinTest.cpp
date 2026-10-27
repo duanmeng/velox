@@ -88,7 +88,7 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
               if (serialExecution && needsIndexSplit) {
                 continue;
               }
-              for (int32_t maxDrivers : {1, 2, 4}) {
+              for (int32_t maxDrivers : {1, 2, 4, 8}) {
                 if (serialExecution && maxDrivers != 1) {
                   continue;
                 }

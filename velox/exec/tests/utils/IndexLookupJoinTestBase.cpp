@@ -444,7 +444,7 @@ std::shared_ptr<Task> IndexLookupJoinTestBase::runLookupQuery(
   queryBuilder.plan(plan)
       .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
       .serialExecution(serialExecution)
-      .barrierExecution(barrierExecution)
+      .barrierExecution(barrierExecution, maxDrivers)
       .maxDrivers(maxDrivers)
       .config(QueryConfig::kMaxOutputBatchRows, std::to_string(maxOutputRows))
       .config(
@@ -477,7 +477,7 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
   expectedResultBuilder.plan(planWithoutMatchColumn)
       .serialExecution(serialExecution)
       .maxDrivers(maxDrivers)
-      .barrierExecution(barrierExecution)
+      .barrierExecution(barrierExecution, maxDrivers)
       .splits(
           probeScanNodeIdWithoutMatchColumn,
           makeHiveConnectorSplits(probeFiles));
@@ -501,7 +501,7 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
   resultWithMatchColumnBuilder.plan(planWithMatchColumn)
       .serialExecution(serialExecution)
       .maxDrivers(maxDrivers)
-      .barrierExecution(barrierExecution)
+      .barrierExecution(barrierExecution, maxDrivers)
       .splits(
           probeScanNodeIdWithMatchColumn, makeHiveConnectorSplits(probeFiles));
   if (needsIndexSplit) {
@@ -535,7 +535,22 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
     }
   }
   auto resultWithoutMatchColumn = makeRowVector(childVectors);
-  assertEqualVectors(expectedResult, resultWithoutMatchColumn);
+  if (maxDrivers > 1) {
+    bool sameOrder = expectedResult->size() == resultWithoutMatchColumn->size();
+    for (vector_size_t i = 0; sameOrder && i < expectedResult->size(); ++i) {
+      sameOrder =
+          expectedResult->equalValueAt(resultWithoutMatchColumn.get(), i, i);
+    }
+    const bool sameRows = assertEqualResults(
+        {std::static_pointer_cast<RowVector>(expectedResult)},
+        {resultWithoutMatchColumn});
+    LOG(INFO) << "match-column comparison: drivers=" << maxDrivers
+              << ", barrier=" << barrierExecution << ", sameOrder=" << sameOrder
+              << ", sameRows=" << sameRows;
+    ASSERT_TRUE(sameRows);
+  } else {
+    assertEqualVectors(expectedResult, resultWithoutMatchColumn);
+  }
   // Verify the match column if it is expected.
   const auto matchColumn =
       rowResultWithMatchMatchColumn

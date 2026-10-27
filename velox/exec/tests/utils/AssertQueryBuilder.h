@@ -49,7 +49,10 @@ class AssertQueryBuilder {
 
   /// Use barrier task execution mode to execute the Velox plan.
   /// Default is false.
-  AssertQueryBuilder& barrierExecution(bool barrier);
+  /// Add up to 'splitsPerBarrier' splits per source before each barrier.
+  AssertQueryBuilder& barrierExecution(
+      bool barrier,
+      uint32_t splitsPerBarrier = 1);
 
   /// Sets the per-task unique id used by AssignUniqueId operators. Default
   /// is 1. See core::PlanFragment::taskUniqueId.
@@ -254,6 +257,7 @@ class AssertQueryBuilder {
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
       connectorSessionProperties_;
   std::unordered_map<core::PlanNodeId, std::vector<Split>> splits_;
+  uint32_t splitsPerBarrier_{1};
   bool addSplitWithSequence_{false};
   // The sequence Id to be used when addSplitWithSequence_ is true.
   int32_t sequenceId_{0};

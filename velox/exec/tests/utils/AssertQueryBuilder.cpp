@@ -84,9 +84,13 @@ AssertQueryBuilder& AssertQueryBuilder::serialExecution(bool serial) {
   return *this;
 }
 
-AssertQueryBuilder& AssertQueryBuilder::barrierExecution(bool barrier) {
+AssertQueryBuilder& AssertQueryBuilder::barrierExecution(
+    bool barrier,
+    uint32_t splitsPerBarrier) {
   VELOX_CHECK(!params_.barrierExecution);
+  VELOX_CHECK_GT(splitsPerBarrier, 0);
   params_.barrierExecution = barrier;
+  splitsPerBarrier_ = splitsPerBarrier;
   return *this;
 }
 
@@ -361,14 +365,19 @@ AssertQueryBuilder::readCursor() {
               continue;
             }
             ++numSplits;
-            if (addSplitWithSequence_) {
-              task->addSplitWithSequence(
-                  nodeId, std::move(nodeSplits[0]), ++sequenceId_);
-              task->setMaxSplitSequenceId(nodeId, sequenceId_);
-            } else {
-              task->addSplit(nodeId, std::move(nodeSplits[0]));
+            const auto numToAdd =
+                std::min<size_t>(nodeSplits.size(), splitsPerBarrier_);
+            for (size_t i = 0; i < numToAdd; ++i) {
+              if (addSplitWithSequence_) {
+                task->addSplitWithSequence(
+                    nodeId, std::move(nodeSplits[i]), ++sequenceId_);
+                task->setMaxSplitSequenceId(nodeId, sequenceId_);
+              } else {
+                task->addSplit(nodeId, std::move(nodeSplits[i]));
+              }
             }
-            nodeSplits.erase(nodeSplits.cbegin());
+            nodeSplits.erase(
+                nodeSplits.cbegin(), nodeSplits.cbegin() + numToAdd);
           }
           if (numSplits > 0) {
             VELOX_CHECK_EQ(
