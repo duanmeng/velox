@@ -258,7 +258,7 @@ HiveConnectorTestBase::makeColumnHandle(
     const TypePtr& dataType,
     const TypePtr& hiveType,
     const std::vector<std::string>& requiredSubfields,
-    connector::hive::FileColumnHandle::ColumnType columnType) {
+    connector::file::FileColumnHandle::ColumnType columnType) {
   std::vector<common::Subfield> subfields;
   subfields.reserve(requiredSubfields.size());
   for (auto& path : requiredSubfields) {
@@ -386,14 +386,14 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       columnHandles.push_back(
           std::make_shared<connector::hive::HiveColumnHandle>(
               tableColumnNames.at(i),
-              connector::hive::FileColumnHandle::ColumnType::kPartitionKey,
+              connector::file::FileColumnHandle::ColumnType::kPartitionKey,
               tableColumnTypes.at(i),
               tableColumnTypes.at(i)));
     } else {
       columnHandles.push_back(
           std::make_shared<connector::hive::HiveColumnHandle>(
               tableColumnNames.at(i),
-              connector::hive::FileColumnHandle::ColumnType::kRegular,
+              connector::file::FileColumnHandle::ColumnType::kRegular,
               tableColumnTypes.at(i),
               tableColumnTypes.at(i)));
     }
@@ -421,7 +421,7 @@ HiveConnectorTestBase::regularColumn(
     const TypePtr& type) {
   return std::make_shared<connector::hive::HiveColumnHandle>(
       name,
-      connector::hive::FileColumnHandle::ColumnType::kRegular,
+      connector::file::FileColumnHandle::ColumnType::kRegular,
       type,
       type);
 }
@@ -432,7 +432,7 @@ HiveConnectorTestBase::synthesizedColumn(
     const TypePtr& type) {
   return std::make_shared<connector::hive::HiveColumnHandle>(
       name,
-      connector::hive::FileColumnHandle::ColumnType::kSynthesized,
+      connector::file::FileColumnHandle::ColumnType::kSynthesized,
       type,
       type);
 }
@@ -443,7 +443,7 @@ HiveConnectorTestBase::partitionKey(
     const TypePtr& type) {
   return std::make_shared<connector::hive::HiveColumnHandle>(
       name,
-      connector::hive::FileColumnHandle::ColumnType::kPartitionKey,
+      connector::file::FileColumnHandle::ColumnType::kPartitionKey,
       type,
       type);
 }
