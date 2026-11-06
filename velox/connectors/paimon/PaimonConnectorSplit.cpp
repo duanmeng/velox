@@ -104,7 +104,8 @@ PaimonConnectorSplit::PaimonConnectorSplit(
       !dataFiles_.empty(), "PaimonConnectorSplit requires non-empty dataFiles");
   VELOX_USER_CHECK_GE(snapshotId_, 0, "Paimon snapshot ID must be nonnegative");
   if (tableBucketNumber_) {
-    VELOX_USER_CHECK_GE(*tableBucketNumber_, -1, "Invalid Paimon bucket ID");
+    // Preserve the legacy -1 sentinel and Paimon's -2 postpone bucket ID.
+    VELOX_USER_CHECK_GE(*tableBucketNumber_, -2, "Invalid Paimon bucket ID");
   }
   paimonTableTypeString(tableType_);
   if (isLegacy()) {

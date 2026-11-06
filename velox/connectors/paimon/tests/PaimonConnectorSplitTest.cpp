@@ -142,7 +142,7 @@ TEST_F(PaimonConnectorSplitTest, splitNumericBoundsAndLayout) {
   wire["snapshotId"] = -1;
   VELOX_ASSERT_USER_THROW(
       PaimonConnectorSplit::create(wire), "snapshot ID must be nonnegative");
-  for (const auto bucket : {int64_t{-2}, int64_t{1} << 32}) {
+  for (const auto bucket : {int64_t{-3}, int64_t{1} << 32}) {
     wire = original;
     wire["tableBucketNumber"] = bucket;
     EXPECT_THROW(PaimonConnectorSplit::create(wire), VeloxUserError);
@@ -153,6 +153,10 @@ TEST_F(PaimonConnectorSplitTest, splitNumericBoundsAndLayout) {
       PaimonConnectorSplit::create(wire), "layout does not match table type");
   wire["tableType"] = "PRIMARY_KEY";
   EXPECT_NO_THROW(PaimonConnectorSplit::create(wire));
+  wire["tableBucketNumber"] = -2;
+  const auto postponed = PaimonConnectorSplit::create(wire);
+  EXPECT_EQ(postponed->tableBucketNumber(), -2);
+  EXPECT_EQ(postponed->serialize(), wire);
 }
 
 TEST_F(PaimonConnectorSplitTest, unknownDeletesDoNotProveRawEligibility) {
