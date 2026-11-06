@@ -25,7 +25,7 @@ velox_add_library(
   PaimonRowKind.h
 )
 
-velox_link_libraries(velox_paimon_split velox_connector velox_dwio_common fmt::fmt)
+velox_link_libraries(velox_paimon_split velox_connector velox_dwio_common velox_caching fmt::fmt)
 
 velox_add_library(velox_paimon_column_handle PaimonColumnHandle.cpp HEADERS PaimonColumnHandle.h)
 

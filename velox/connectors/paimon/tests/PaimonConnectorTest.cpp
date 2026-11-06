@@ -1059,6 +1059,60 @@ TEST_F(PaimonConnectorTest, dynamicFilterAndEmptyFiles) {
   }
 }
 
+TEST_F(PaimonConnectorTest, versionedMetadataDoesNotEnterLegacyReader) {
+  const auto fileSystem = validationFileSystem();
+  fileSystem->openedFiles = 0;
+  auto queryCtx = core::QueryCtx::create();
+  auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  const auto input = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2})});
+  const auto rowType = asRowType(input->type());
+  const auto table = makePaimonTableHandle(rowType);
+  const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+  auto source = connector->createDataSource(
+      rowType, table, makePaimonColumnHandles(rowType), context.get());
+  const auto path = TempFilePath::create();
+  writeFile(path->getPath(), input, dwio::common::FileFormat::DWRF);
+
+  PaimonDataFile file;
+  file.path = "paimon-table-test:" + path->getPath();
+  file.size = 1024;
+  file.rowCount = 2;
+  file.deleteRowCount = 0;
+  file.schemaId = table->schemaId() + 1;
+  file.fileFormat = dwio::common::FileFormat::DWRF;
+  file.layout = PaimonDataFile::Layout::kAppend;
+  const auto versionedSplit = [&] {
+    const auto split = PaimonConnectorSplitBuilder(
+                           kPaimonConnectorId, 1, PaimonTableType::kAppendOnly)
+                           .addFile(file)
+                           .rawConvertible(true)
+                           .build();
+    return PaimonConnectorSplit::create(split->serialize());
+  };
+  VELOX_ASSERT_USER_THROW(
+      source->addSplit(versionedSplit()), "Missing Paimon schema");
+  file.schemaId = table->schemaId();
+  VELOX_ASSERT_THROW(
+      source->addSplit(versionedSplit()),
+      "Versioned Paimon split reading is not implemented");
+  EXPECT_EQ(fileSystem->openedFiles, 0);
+
+  source->addSplit(makePaimonSplit(
+      {file.path},
+      PaimonTableType::kAppendOnly,
+      dwio::common::FileFormat::DWRF));
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  auto result = source->next(10, future);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_NE(*result, nullptr);
+  test::assertEqualVectors(input, *result);
+  EXPECT_EQ(fileSystem->openedFiles, 1);
+}
+
 TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
   const auto fileSystem = validationFileSystem();
   fileSystem->openedFiles = 0;

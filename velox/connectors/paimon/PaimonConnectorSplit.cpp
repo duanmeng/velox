@@ -46,12 +46,53 @@ PaimonConnectorSplit::PaimonConnectorSplit(
     const std::string& connectorId,
     int64_t snapshotId,
     PaimonTableType tableType,
+    const std::vector<PaimonDataFile>& dataFiles,
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
+    std::optional<int32_t> tableBucketNumber,
+    bool rawConvertible)
+    : PaimonConnectorSplit(
+          kSerdeVersion,
+          connectorId,
+          snapshotId,
+          tableType,
+          dwio::common::FileFormat::UNKNOWN,
+          dataFiles,
+          std::move(partitionKeys),
+          tableBucketNumber,
+          rawConvertible) {}
+
+PaimonConnectorSplit::PaimonConnectorSplit(
+    const std::string& connectorId,
+    int64_t snapshotId,
+    PaimonTableType tableType,
+    dwio::common::FileFormat fileFormat,
+    const std::vector<PaimonDataFile>& dataFiles,
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
+    std::optional<int32_t> tableBucketNumber,
+    bool rawConvertible)
+    : PaimonConnectorSplit(
+          0,
+          connectorId,
+          snapshotId,
+          tableType,
+          fileFormat,
+          dataFiles,
+          std::move(partitionKeys),
+          tableBucketNumber,
+          rawConvertible) {}
+
+PaimonConnectorSplit::PaimonConnectorSplit(
+    int32_t serdeVersion,
+    const std::string& connectorId,
+    int64_t snapshotId,
+    PaimonTableType tableType,
     dwio::common::FileFormat fileFormat,
     const std::vector<PaimonDataFile>& dataFiles,
     std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
     std::optional<int32_t> tableBucketNumber,
     bool rawConvertible)
     : ConnectorSplit(connectorId),
+      serdeVersion_(serdeVersion),
       snapshotId_(snapshotId),
       tableType_(tableType),
       fileFormat_(fileFormat),
@@ -61,15 +102,56 @@ PaimonConnectorSplit::PaimonConnectorSplit(
       rawConvertible_(rawConvertible) {
   VELOX_CHECK(
       !dataFiles_.empty(), "PaimonConnectorSplit requires non-empty dataFiles");
-
-  if (rawConvertible_) {
-    for (const auto& file : dataFiles_) {
+  VELOX_USER_CHECK_GE(snapshotId_, 0, "Paimon snapshot ID must be nonnegative");
+  if (tableBucketNumber_) {
+    VELOX_USER_CHECK_GE(*tableBucketNumber_, -1, "Invalid Paimon bucket ID");
+  }
+  paimonTableTypeString(tableType_);
+  if (isLegacy()) {
+    VELOX_USER_CHECK(
+        fileFormat_ != dwio::common::FileFormat::UNKNOWN,
+        "Unknown Paimon split file format");
+    dwio::common::FileFormatName::toName(fileFormat_);
+  }
+  for (const auto& file : dataFiles_) {
+    file.validate();
+    VELOX_USER_CHECK(
+        file.schemaId.has_value() == !isLegacy(),
+        "Paimon split version must match its file metadata: version {} file {}",
+        serdeVersion_,
+        file.path);
+    if (file.layout) {
+      const auto expectedLayout = tableType_ == PaimonTableType::kAppendOnly
+          ? PaimonDataFile::Layout::kAppend
+          : PaimonDataFile::Layout::kKeyValue;
+      VELOX_USER_CHECK(
+          *file.layout == expectedLayout,
+          "Paimon file layout does not match table type: {}",
+          file.path);
+    }
+    if (rawConvertible_) {
+      VELOX_USER_CHECK(
+          file.deleteRowCount.has_value(),
+          "rawConvertible split requires known zero deleteRowCount: {}",
+          file.path);
       VELOX_CHECK_EQ(
-          file.deleteRowCount,
+          *file.deleteRowCount,
           0,
           "rawConvertible split cannot have files with deleteRowCount > 0: {}",
           file.toString());
     }
+  }
+}
+
+void PaimonConnectorSplit::checkSchemaIds(
+    const std::unordered_set<int64_t>& schemaIds) const {
+  VELOX_USER_CHECK(!isLegacy(), "Legacy Paimon input has no file schema IDs");
+  for (const auto& file : dataFiles_) {
+    VELOX_USER_CHECK(
+        schemaIds.count(*file.schemaId),
+        "Missing Paimon schema {} referenced by file {}",
+        *file.schemaId,
+        file.path);
   }
 }
 
@@ -117,7 +199,11 @@ folly::dynamic PaimonConnectorSplit::serialize() const {
       ? folly::dynamic(tableBucketNumber_.value())
       : nullptr;
 
-  obj["fileFormat"] = dwio::common::FileFormatName::toName(fileFormat_);
+  if (isLegacy()) {
+    obj["fileFormat"] = dwio::common::FileFormatName::toName(fileFormat_);
+  } else {
+    obj["version"] = kSerdeVersion;
+  }
 
   return obj;
 }
@@ -125,6 +211,11 @@ folly::dynamic PaimonConnectorSplit::serialize() const {
 // static
 std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplit::create(
     const folly::dynamic& obj) {
+  const auto version = obj.getDefault("version", 0).asInt();
+  VELOX_USER_CHECK(
+      version == 0 || version == kSerdeVersion,
+      "Unsupported Paimon split wire version: {}",
+      version);
   const auto connectorId = obj["connectorId"].asString();
   const auto snapshotId = obj["snapshotId"].asInt();
   const auto tableType = paimonTableTypeFromString(obj["tableType"].asString());
@@ -144,7 +235,22 @@ std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplit::create(
 
   const auto tableBucketNumber = obj["tableBucketNumber"].isNull()
       ? std::nullopt
-      : std::optional<int32_t>(obj["tableBucketNumber"].asInt());
+      : std::optional<int32_t>(
+            ISerializable::deserialize<int32_t>(obj["tableBucketNumber"]));
+
+  if (version == kSerdeVersion) {
+    VELOX_USER_CHECK(
+        !obj.count("fileFormat"),
+        "Versioned Paimon splits use per-file formats, not a split fileFormat");
+    return std::make_shared<PaimonConnectorSplit>(
+        connectorId,
+        snapshotId,
+        tableType,
+        dataFiles,
+        std::move(partitionKeys),
+        tableBucketNumber,
+        rawConvertible);
+  }
 
   const auto fileFormat =
       dwio::common::toFileFormat(obj["fileFormat"].asString());
@@ -169,13 +275,23 @@ void PaimonConnectorSplit::registerSerDe() {
 // --- Builder ---
 
 PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
+    PaimonDataFile file) {
+  dataFiles_.push_back(std::move(file));
+  return *this;
+}
+
+PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
     std::string filePath,
     uint64_t fileSize,
     int32_t level) {
+  VELOX_USER_CHECK(
+      fileFormat_.has_value(),
+      "Versioned Paimon splits require complete PaimonDataFile metadata");
   PaimonDataFile meta;
   meta.path = std::move(filePath);
   meta.size = fileSize;
   meta.level = level;
+  meta.deleteRowCount = 0;
   dataFiles_.emplace_back(std::move(meta));
   return *this;
 }
@@ -200,11 +316,21 @@ PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::rawConvertible(
 }
 
 std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplitBuilder::build() {
+  if (!fileFormat_) {
+    return std::make_shared<PaimonConnectorSplit>(
+        connectorId_,
+        snapshotId_,
+        tableType_,
+        dataFiles_,
+        partitionKeys_,
+        tableBucketNumber_,
+        rawConvertible_);
+  }
   return std::make_shared<PaimonConnectorSplit>(
       connectorId_,
       snapshotId_,
       tableType_,
-      fileFormat_,
+      *fileFormat_,
       dataFiles_,
       partitionKeys_,
       tableBucketNumber_,

@@ -24,7 +24,9 @@
 
 #include <folly/CPortability.h>
 
+#include "velox/common/caching/FileProperties.h"
 #include "velox/connectors/paimon/PaimonDeletionFile.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::paimon {
 
@@ -37,6 +39,16 @@ namespace facebook::velox::connector::paimon {
 ///   - kData: regular data file (current state of records).
 ///   - kChangelog: changelog file with RowKind (+I/-U/+U/-D) for streaming.
 struct PaimonDataFile {
+  /// Normalized physical layouts, not a Paimon storage-schema version.
+  /// Tracking, data-evolution and thin key/value layouts are not represented.
+  enum class Layout {
+    kAppend,
+    kKeyValue,
+  };
+
+  static std::string layoutString(Layout layout);
+  static Layout layoutFromString(const std::string& str);
+
   /// Whether this file is a data file or a changelog file. Both use the
   /// same physical format — this enum distinguishes their semantic role.
   ///
@@ -91,6 +103,17 @@ struct PaimonDataFile {
   /// Path to the file (ORC, Parquet, etc.).
   std::string path;
 
+  /// All three are required in versioned splits. Absent together only for
+  /// legacy input; a missing file schema ID must not be filled from the table.
+  std::optional<int64_t> schemaId;
+  std::optional<dwio::common::FileFormat> fileFormat;
+  std::optional<Layout> layout;
+
+  /// Serializable file access description. Runtime token providers remain in
+  /// ConnectorQueryCtx. Carrying these fields does not enable their execution.
+  std::optional<FileProperties> properties;
+  bool cacheable{true};
+
   /// Size of the file in bytes.
   uint64_t size{0};
 
@@ -114,22 +137,9 @@ struct PaimonDataFile {
   int64_t minSequenceNumber{0};
   int64_t maxSequenceNumber{0};
 
-  /// Number of rows in this file with RowKind = DELETE or UPDATE_BEFORE.
-  /// row_count = addRowCount + deleteRowCount, where addRowCount is the
-  /// number of INSERT or UPDATE_AFTER rows.
-  ///
-  /// Only applicable to primary-key tables. Append-only tables have no
-  /// _rowkind column and every row is implicitly +I, so deleteRowCount is
-  /// always 0.
-  ///
-  /// This is independent of deletionFile — deleteRowCount counts changelog
-  /// records stored inside the file, while deletionFile is an external bitmap
-  /// of positionally deleted rows.
-  ///
-  /// Used to determine rawConvertible: if deleteRowCount > 0, the file
-  /// contains changelog records and cannot be read raw (needs RowKind
-  /// filtering during merge-on-read).
-  int64_t deleteRowCount{0};
+  /// Count of DELETE / UPDATE_BEFORE records, independent of external
+  /// positional deletion vectors. Unknown is not evidence of zero deletes.
+  std::optional<int64_t> deleteRowCount;
 
   /// Timestamp (epoch millis) when this file was created.
   int64_t creationTimeMs{0};
@@ -148,6 +158,10 @@ struct PaimonDataFile {
   /// RowKind-based changelog records.
   /// See PaimonDeletionFile for details.
   std::optional<PaimonDeletionFile> deletionFile;
+
+  /// Checks the local representation, without opening a file or resolving
+  /// schemas. Mutable metadata is checked when serialized or put in a split.
+  void validate() const;
 
   std::string toString() const;
   folly::dynamic serialize() const;

@@ -49,6 +49,15 @@ PaimonDataSource::PaimonDataSource(
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   auto paimonSplit = checkedPointerCast<PaimonConnectorSplit>(split);
+  if (!paimonSplit->isLegacy()) {
+    // Only the fixed target definition is available to the legacy reader.
+    // Do not substitute it for a missing historical schema or ignore the new
+    // per-file format, layout and access description.
+    paimonSplit->checkSchemaIds({paimonTableHandle_->schemaId()});
+    VELOX_UNSUPPORTED(
+        "Versioned Paimon split reading is not implemented; "
+        "the current reader only accepts legacy same-schema input");
+  }
   VELOX_USER_CHECK_EQ(
       paimonSplit->tableType(),
       paimonTableHandle_->tableType(),

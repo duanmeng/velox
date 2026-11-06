@@ -20,6 +20,7 @@
 #include <ostream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <folly/CPortability.h>
@@ -86,6 +87,20 @@ namespace facebook::velox::connector::paimon {
 /// snapshot identity and raw-read eligibility. See the file-level design above.
 class PaimonConnectorSplit : public connector::ConnectorSplit {
  public:
+  static constexpr int32_t kSerdeVersion = 1;
+
+  /// Versioned file-set metadata. Every file must specify its schema ID,
+  /// format and layout. This does not enable a reader for the new protocol.
+  PaimonConnectorSplit(
+      const std::string& connectorId,
+      int64_t snapshotId,
+      PaimonTableType tableType,
+      const std::vector<PaimonDataFile>& dataFiles,
+      std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
+      std::optional<int32_t> tableBucketNumber,
+      bool rawConvertible);
+
+  /// Legacy input with a single split-level format and no file schema metadata.
   /// @param connectorId Connector identifier.
   /// @param snapshotId Snapshot ID associated with the planner-selected files.
   /// @param tableType Whether this is an append-only or primary-key table.
@@ -135,6 +150,15 @@ class PaimonConnectorSplit : public connector::ConnectorSplit {
     return fileFormat_;
   }
 
+  bool isLegacy() const {
+    return serdeVersion_ == 0;
+  }
+
+  /// Checks references against the keys of the caller's normalized schema
+  /// definitions. Does not infer missing file IDs from the target schema or
+  /// parse stored schema JSON. The input need only carry referenced schemas.
+  void checkSchemaIds(const std::unordered_set<int64_t>& schemaIds) const;
+
   std::string toString() const override;
 
   folly::dynamic serialize() const override;
@@ -145,6 +169,18 @@ class PaimonConnectorSplit : public connector::ConnectorSplit {
   static void registerSerDe();
 
  private:
+  PaimonConnectorSplit(
+      int32_t serdeVersion,
+      const std::string& connectorId,
+      int64_t snapshotId,
+      PaimonTableType tableType,
+      dwio::common::FileFormat fileFormat,
+      const std::vector<PaimonDataFile>& dataFiles,
+      std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
+      std::optional<int32_t> tableBucketNumber,
+      bool rawConvertible);
+
+  const int32_t serdeVersion_;
   const int64_t snapshotId_;
   const PaimonTableType tableType_;
   const dwio::common::FileFormat fileFormat_;
@@ -158,6 +194,19 @@ class PaimonConnectorSplit : public connector::ConnectorSplit {
 /// Builder for PaimonConnectorSplit construction.
 class PaimonConnectorSplitBuilder {
  public:
+  /// Builds versioned metadata using addFile(PaimonDataFile). Raw eligibility
+  /// must be supplied explicitly; no file format or schema ID is guessed.
+  PaimonConnectorSplitBuilder(
+      std::string connectorId,
+      int64_t snapshotId,
+      PaimonTableType tableType)
+      : connectorId_(std::move(connectorId)),
+        snapshotId_(snapshotId),
+        tableType_(tableType),
+        fileFormat_(std::nullopt),
+        rawConvertible_(false) {}
+
+  /// Preserves the legacy builder's same-schema input contract.
   PaimonConnectorSplitBuilder(
       std::string connectorId,
       int64_t snapshotId,
@@ -168,6 +217,10 @@ class PaimonConnectorSplitBuilder {
         tableType_(tableType),
         fileFormat_(fileFormat) {}
 
+  PaimonConnectorSplitBuilder& addFile(PaimonDataFile file);
+
+  /// Legacy convenience input: retains its original known-zero-delete
+  /// semantics. Not available for versioned metadata.
   PaimonConnectorSplitBuilder&
   addFile(std::string filePath, uint64_t fileSize, int32_t level = 0);
 
@@ -185,7 +238,7 @@ class PaimonConnectorSplitBuilder {
   const std::string connectorId_;
   const int64_t snapshotId_;
   const PaimonTableType tableType_;
-  const dwio::common::FileFormat fileFormat_;
+  const std::optional<dwio::common::FileFormat> fileFormat_;
   std::vector<PaimonDataFile> dataFiles_;
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
   std::optional<int32_t> tableBucketNumber_;
