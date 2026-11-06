@@ -88,7 +88,7 @@ TEST(PaimonDataFileTest, unknownZeroAndPositiveDeletes) {
 }
 
 TEST(PaimonDataFileTest, legacyWireIsPreserved) {
-  const auto wire = folly::dynamic::object("filePath", "legacy.orc")(
+  const folly::dynamic wire = folly::dynamic::object("filePath", "legacy.orc")(
       "fileSize", 1024)("rowCount", 100)("level", 0)("minSequenceNumber", -1)(
       "maxSequenceNumber", -1)("deleteRowCount", 0)("creationTimeMs", 0)(
       "fileType", "DATA")("sourceType", "APPEND");

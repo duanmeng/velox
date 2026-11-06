@@ -1074,7 +1074,7 @@ TEST_F(PaimonConnectorTest, versionedMetadataDoesNotEnterLegacyReader) {
   const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
   auto source = connector->createDataSource(
       rowType, table, makePaimonColumnHandles(rowType), context.get());
-  const auto path = TempFilePath::create();
+  const auto path = makeFilePaths(1).front();
   writeFile(path->getPath(), input, dwio::common::FileFormat::DWRF);
 
   PaimonDataFile file;

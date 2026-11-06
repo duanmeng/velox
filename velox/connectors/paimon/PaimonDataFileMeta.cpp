@@ -200,8 +200,10 @@ PaimonDataFile PaimonDataFile::create(const folly::dynamic& obj) {
   file.level = ISerializable::deserialize<int32_t>(obj.at("level"));
   file.minSequenceNumber = obj["minSequenceNumber"].asInt();
   file.maxSequenceNumber = obj["maxSequenceNumber"].asInt();
-  file.deleteRowCount = ISerializable::deserialize<std::optional<int64_t>>(
-      obj.at("deleteRowCount"));
+  const auto& deleteRowCount = obj.at("deleteRowCount");
+  if (!deleteRowCount.isNull()) {
+    file.deleteRowCount = deleteRowCount.asInt();
+  }
   file.creationTimeMs = obj["creationTimeMs"].asInt();
   file.type = typeFromString(obj["fileType"].asString());
   file.source = sourceFromString(obj["sourceType"].asString());
